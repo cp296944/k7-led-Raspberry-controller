@@ -15,11 +15,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/config"
+	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/httpapi"
+	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/proxy"
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/updater"
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/version"
 )
@@ -68,9 +71,21 @@ func run(args []string) error {
 		go updateLoop(ctx, up, d)
 	}
 
+	api, err := httpapi.New(httpapi.Options{
+		ConfigPath: filepath.Join(cfg.DataDir, "store.json"),
+		Version:    version.Version,
+		Timeout:    5 * time.Second,
+		Device:     "k7pro",
+		LampHost:   cfg.LampHost,
+		LampPort:   cfg.LampPort,
+	})
+	if err != nil {
+		return fmt.Errorf("http api: %w", err)
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           routes(cfg, up),
+		Handler:           routes(cfg, up, api),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -81,6 +96,18 @@ func run(args []string) error {
 			errCh <- err
 		}
 	}()
+
+	if cfg.Proxy != "" {
+		px := &proxy.Proxy{
+			Listen:   cfg.Proxy,
+			LampAddr: fmt.Sprintf("%s:%d", cfg.LampHost, cfg.LampPort),
+		}
+		go func() {
+			if err := px.Run(ctx); err != nil {
+				slog.Error("proxy stopped", "err", err)
+			}
+		}()
+	}
 
 	select {
 	case <-ctx.Done():
@@ -94,47 +121,12 @@ func run(args []string) error {
 	return srv.Shutdown(shutCtx)
 }
 
-func routes(cfg config.Config, up *updater.Updater) http.Handler {
+func routes(cfg config.Config, up *updater.Updater, api *httpapi.Server) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		fmt.Fprintln(w, "ok")
-	})
-
-	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"bridge": "pi-bridge", "platform": "pi_bridge", "transport": "direct_lamp",
-			"firmware": version.Version, "version": version.Version,
-			"commit": version.Commit, "date": version.Date,
-		})
-	})
-
-	// Phase 2 flips several of these on; Phase 3 the rest. See docs/API.md.
-	mux.HandleFunc("GET /api/capabilities", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"platform": "pi_bridge", "transport": "direct_lamp",
-			"capabilities": map[string]bool{
-				"read_lamp":                   false,
-				"push_schedule":               false,
-				"manual_preview":              false,
-				"profiles":                    false,
-				"community_presets":           false,
-				"community_presets_browse":    false,
-				"backup_restore":              false,
-				"fixed_lunar":                 false,
-				"siesta_baked_schedule":       false,
-				"smooth_ramp":                 false,
-				"tracked_lunar":               false,
-				"acclimation":                 false,
-				"seasonal_daylength":          false,
-				"feed_mode":                   false,
-				"maintenance_mode":            false,
-				"setup_portal":                false,
-				"logs":                        false,
-				"persistent_controller_clock": false,
-			},
-		})
 	})
 
 	mux.HandleFunc("GET /api/update/status", func(w http.ResponseWriter, r *http.Request) {
@@ -176,6 +168,11 @@ func routes(cfg config.Config, up *updater.Updater) http.Handler {
 			}
 		}()
 	})
+
+	// Everything else — the shared UI, /api/version, /api/capabilities, and the
+	// pc-bridge endpoint set — is served by the vendored httpapi package. Go 1.22
+	// ServeMux gives the specific patterns above precedence over this "/".
+	mux.Handle("/", api.Routes())
 
 	return logRequests(mux)
 }
