@@ -1,0 +1,107 @@
+# K7 Pi Bridge — Build Progress (living handoff)
+
+**If you are a resumed/scheduled session: read this whole file, then
+[PLAN.md](PLAN.md) and [DESIGN.md](DESIGN.md). Execute the NEXT unchecked
+step(s) only. Commit + push after each. Update this file. If blocked, write the
+blocker under "BLOCKED" and stop.**
+
+## Hard rules for any session working this
+
+- Work only on branch `dev/pi-bridge` in `D:\HomeAssistant\K7\k7-led-controller`.
+  Never commit to `master`. Never `git push --force`.
+- Git identity is repo-local: `cp296944` / `cp296944@gmail.com` (already set).
+- `gh` CLI is authed as `cp296944` — pushing works.
+- Go: `C:\Program Files\Go\bin\go.exe` (1.27.0). arm64 cross-compile verified.
+- The Pi: `ssh -i %USERPROFILE%\.ssh\id_ed25519_k7pi k7pi@192.168.0.149`
+  (DHCP-reserved). sudo is NOPASSWD. It is dual-homed: eth0 `192.168.0.149`
+  (LAN), wlan0 `192.168.4.2` (K7 AP). **The K7 lamp answers at
+  `192.168.4.1:8266` and this was verified end-to-end.** Wi-Fi signal is weak
+  right now (Pi far from tank) — user will move it later; do NOT tune timeouts
+  around the current bad signal, just make them generous + retrying.
+- NEVER touch eth0 / sshd config on the Pi (lock-out risk). wlan0 changes only.
+- Do not reflash the user's ESP32 — it is the parity oracle.
+- Keep upstream files untouched (`pc-bridge/`, `shared-ui/`, `arduino/`,
+  `tools/` except NEW files) so `git merge upstream/master` stays clean.
+- The shared UI is capability-driven: "1:1" = all 18 capability flags `true`
+  and their endpoints implemented. See PLAN.md §0 for the ledger.
+
+## Key facts already established
+
+- Protocol: TCP `192.168.4.1:8266`, frame `AA A5 <cmd hi> <cmd lo> <data> BB`,
+  6 channels 0-255, 24 slots. Reference impl:
+  `pc-bridge/internal/k7tcp/client.go` (vendored into `pi-bridge/`).
+- `pi-bridge/` cannot import `pc-bridge/internal/*` (Go internal rule, separate
+  module). Decision: **vendor** `k7tcp/client.go` into
+  `pi-bridge/internal/k7tcp/` with a provenance header + a CI sync check.
+- The 21 "free" endpoints in `pc-bridge/internal/bridge/server.go` are
+  reimplemented in `pi-bridge` (we need all-caps-true + real scheduler + a
+  different store anyway).
+- Live K7 Pro readAll decoded: 6ch = 50/50/50/50/50/50, 24 slots, name
+  `K7_Pro42113`, device `k7pro`.
+
+---
+
+## Milestone checklist
+
+### Phase 0 — Foundation
+- [x] Fork cloned to `D:\HomeAssistant\K7\k7-led-controller`, branch `dev/pi-bridge` pushed, `upstream` remote added
+- [x] Actions workflow token perms → write (for OTA releases)
+- [x] Go 1.27 verified, arm64 cross-compile verified
+- [x] `pi-bridge/` Go module scaffold (go.mod zero-dep, cmd/k7-pi-bridge/main.go serves /healthz + /api/version, internal/{config,version} done, other internal/ dirs stubbed)
+- [x] Vendor `k7tcp/client.go` → `pi-bridge/internal/k7tcp/` + provenance header + UPSTREAM_SHA
+- [x] `pi-bridge/docs/API.md` — endpoint/capability ledger (compact; per-endpoint shapes filled in as Phase 2/3 implements them)
+- [x] `tools/parity_check.py` — diff endpoint JSON between two base URLs
+- [x] `tools/check_k7tcp_sync.py` — CI guard that vendored k7tcp matches upstream (passing)
+- note: `go vet ./...` trips on the vendored upstream file (IPv6 `%s:%d` nit); CI vets our packages only
+
+### Phase 1 — Pi base + OTA  (tag `pi-v0.1`)
+- [ ] `internal/config` — load/save `config.toml` (see DESIGN.md §9)
+- [ ] minimal daemon: `/api/version`, `/healthz`, structured logging
+- [ ] `internal/updater` — poll GitHub latest release, verify SHA256, atomic symlink swap, restart, rollback on failed health check
+- [ ] `.github/workflows/pi-bridge.yml` — on tag `pi-v*`: build `linux/arm64`, emit binary + `SHA256SUMS` + `version.json`, publish Release
+- [ ] `pi-bridge/deploy/` — `install.sh`, `uninstall.sh`, `k7-pi-bridge.service`, `k7-pi-bridge-update.timer`, `setup-network.sh` (wlan0 never-default), nftables ruleset
+- [ ] deploy to Pi, verify: tag `pi-v0.1` then `pi-v0.2` → Pi self-updates, `/api/version` shows 0.2
+- [ ] **exit gate:** user tags a release, Pi upgrades unattended, rollback works
+
+### Phase 2 — Lamp link + read path  (tag `pi-v0.3`)
+- [ ] `internal/lamp` — single mutexed TCP conn, reconnect w/ backoff, periodic syncTime, generous timeouts
+- [ ] `internal/store` — config/state/profiles/backups JSON in `/opt/k7-pi-bridge/data`
+- [ ] `internal/proxy` — raw `:8266` passthrough on eth0
+- [ ] `internal/httpapi` — embed shared-ui, serve `/`, wire the 21 pc-bridge endpoints, `/api/capabilities` with the 9 currently-true flags
+- [ ] presets from `arduino/src/Presets.h` (reuse `tools/generate_pc_bridge_presets.py` output)
+- [ ] **exit gate:** `http://<pi>/` loads UI on LAN; Read/Preview/manual/push-native-schedule work against real lamp; parity_check green on those 21
+
+### Phase 3 — Always-on engine  (tags `pi-v0.4`..`0.9`)  ← the big port of Effects.cpp + Moon.cpp
+- [ ] v0.4 `persistent_controller_clock` + `/api/time` + `logs` + scheduler tick + `/api/output/status` + `/api/wifi/signal`
+- [ ] v0.5 `smooth_ramp` (`/api/ramp/*`) — default OFF, push-on-change, ≥2min
+- [ ] v0.6 `feed_mode` + `maintenance_mode` (`/api/feed/*`, `/api/maintenance/*`)
+- [ ] v0.7 `tracked_lunar` (moon phase 22.63N 120.30E, extends `/api/lunar/*`)
+- [ ] v0.8 `acclimation` (`/api/acclimation/*`)
+- [ ] v0.9 `seasonal_daylength` (`/api/seasonal/*`)
+- [ ] golden-vector tests vs ESP32 `/api/output/status` for the engine
+- [ ] **exit gate:** 17/18 caps, UI shows every control, all work
+
+### Phase 4 — Setup page + hardening  (tag `pi-v1.0`)
+- [ ] `setup_portal` equivalent (lamp SSID/IP settings page, wifi status, factory reset)
+- [ ] `/api/warnings/status`, diagnostics page
+- [ ] 7-day soak on the Pi
+- [ ] `pi-bridge/README.md` + top-level `README.md` rewrite (user asked: explain the project for others)
+- [ ] optional: PR `pi-bridge/` back to bitbarista
+- [ ] **exit gate: 18/18. `pi-v1.0`.**
+
+### Phase 5 — Home Assistant (tag `pi-v1.1`)
+- [ ] `/api/ha/*` REST surface
+- [ ] `homeassistant/k7_lamp/` custom integration (light, 6×number, switch, select, buttons, binary_sensor, sensor)
+- [ ] install into `D:\HomeAssistant\custom_components\k7_lamp\`
+
+---
+
+## BLOCKED
+_(none)_
+
+## Session log
+- 2026-09-07/08 — Phase 0 started. Fork+branch+CI-perms done. Go verified.
+  Studied k7tcp + bridge server. Scaffolded `pi-bridge/` (go.mod zero-dep,
+  main.go, config, version, vendored k7tcp). API.md ledger + parity_check.py +
+  check_k7tcp_sync.py written. Build + arm64 cross-build green. **Phase 0 done.**
+  Next: Phase 1 — updater + CI workflow + deploy scripts, tag pi-v0.1.
