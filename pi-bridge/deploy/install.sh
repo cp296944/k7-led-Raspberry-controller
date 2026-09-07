@@ -65,7 +65,9 @@ PY
 }
 
 install_binary() {  # $1 = tag , $2 = source (local path OR "")
-  local tag="$1" src="$2" reldir="$ROOT/releases/$tag"
+  local tag="$1"
+  local src="${2:-}"
+  local reldir="$ROOT/releases/$tag"
   mkdir -p "$reldir"
   if [[ -n "$src" ]]; then
     install -m 0755 -o "$USER_NAME" -g "$USER_NAME" "$src" "$reldir/k7-pi-bridge"

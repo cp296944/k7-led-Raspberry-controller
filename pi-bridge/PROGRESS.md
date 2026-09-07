@@ -54,14 +54,18 @@ blocker under "BLOCKED" and stop.**
 - [x] `tools/check_k7tcp_sync.py` — CI guard that vendored k7tcp matches upstream (passing)
 - note: `go vet ./...` trips on the vendored upstream file (IPv6 `%s:%d` nit); CI vets our packages only
 
-### Phase 1 — Pi base + OTA  (tag `pi-v0.1`)
-- [ ] `internal/config` — load/save `config.toml` (see DESIGN.md §9)
-- [ ] minimal daemon: `/api/version`, `/healthz`, structured logging
-- [ ] `internal/updater` — poll GitHub latest release, verify SHA256, atomic symlink swap, restart, rollback on failed health check
-- [ ] `.github/workflows/pi-bridge.yml` — on tag `pi-v*`: build `linux/arm64`, emit binary + `SHA256SUMS` + `version.json`, publish Release
-- [ ] `pi-bridge/deploy/` — `install.sh`, `uninstall.sh`, `k7-pi-bridge.service`, `k7-pi-bridge-update.timer`, `setup-network.sh` (wlan0 never-default), nftables ruleset
-- [ ] deploy to Pi, verify: tag `pi-v0.1` then `pi-v0.2` → Pi self-updates, `/api/version` shows 0.2
-- [ ] **exit gate:** user tags a release, Pi upgrades unattended, rollback works
+### Phase 1 — Pi base + OTA  ✅ DONE (tags `pi-v0.1.0`, `pi-v0.2.0`)
+- [x] `internal/config` — JSON file < env < flags, zero-dep (config.toml → config.json)
+- [x] minimal daemon: `/api/version`, `/healthz`, `/api/capabilities`, `/api/update/{status,apply}`, slog
+- [x] `internal/updater` — GitHub releases API, semver pick, SHA256 verify, atomic symlink swap, restart, ConfirmAfterStart; unit tests
+- [x] `.github/workflows/pi-bridge.yml` — check job (sync/vet/test/build) + release job on `pi-v*` (arm64, ldflags stamp, SHA256SUMS+version.json, `gh release create`)
+- [x] `pi-bridge/deploy/` — install.sh (idempotent, --binary bootstrap), uninstall.sh, k7-pi-bridge.service (k7bridge user, CAP_NET_BIND_SERVICE, OnFailure), k7-pi-bridge-rollback.service + rollback.sh (loop-guarded), polkit rule
+- [x] deployed to Pi (`192.168.0.149:80`), reachable from Windows LAN
+- [x] **exit gate PASSED on real hardware:** tagged pi-v0.1.0→pi-v0.2.0, `POST /api/update/apply` → Pi downloaded+verified+swapped+restarted → `/api/version` = pi-v0.2.0. Rollback drill: broken release → crash-loop → systemd OnFailure → rollback.sh reverted to pi-v0.2.0, service healthy.
+- NOTE: routing NOT modified (eth0 wins by metric 100<600); wlan0 never-default deferred. Deploy never touches eth0/sshd.
+- NOTE: install.sh cosmetic bug — "LAN UI" line prints `http:/…/24` (harmless)
+
+**Pi is currently running pi-v0.2.0 as a systemd service.**
 
 ### Phase 2 — Lamp link + read path  (tag `pi-v0.3`)
 - [ ] `internal/lamp` — single mutexed TCP conn, reconnect w/ backoff, periodic syncTime, generous timeouts
@@ -100,8 +104,12 @@ blocker under "BLOCKED" and stop.**
 _(none)_
 
 ## Session log
-- 2026-09-07/08 — Phase 0 started. Fork+branch+CI-perms done. Go verified.
-  Studied k7tcp + bridge server. Scaffolded `pi-bridge/` (go.mod zero-dep,
-  main.go, config, version, vendored k7tcp). API.md ledger + parity_check.py +
-  check_k7tcp_sync.py written. Build + arm64 cross-build green. **Phase 0 done.**
-  Next: Phase 1 — updater + CI workflow + deploy scripts, tag pi-v0.1.
+- 2026-09-07/08 — Phase 0 done (scaffold, vendored k7tcp, config, version,
+  API.md, parity tooling).
+- 2026-09-08 — **Phase 1 done.** updater + CI + deploy scripts. Deployed to Pi.
+  OTA self-update AND rollback both verified on real hardware end-to-end.
+  Pi running pi-v0.2.0. Next: **Phase 2** — vendor+adapt the pc-bridge HTTP
+  server into `internal/httpapi`, embed shared-ui, `internal/lamp` (mutexed
+  conn), `internal/store`, `internal/proxy` (raw :8266), wire the 21 free
+  endpoints, flip 9 capability flags true. Exit: UI loads on LAN, Read/Preview/
+  manual/push work vs real lamp, parity_check green on those 21.
