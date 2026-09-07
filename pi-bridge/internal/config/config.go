@@ -37,7 +37,8 @@ type Config struct {
 	UpdateInterval string `json:"update_interval"` // Go duration, e.g. "1h" ("" disables auto)
 
 	// Paths.
-	DataDir string `json:"data_dir"`
+	InstallRoot string `json:"install_root"` // OTA layout root (releases/, current, state/)
+	DataDir     string `json:"data_dir"`     // writable app state; default ${InstallRoot}/data
 
 	// Ops.
 	BackupTarget string `json:"backup_target"` // rsync/scp dest, "" = off
@@ -57,9 +58,16 @@ func Defaults() Config {
 		UpdateRepo:     "cp296944/k7-led-Raspberry-controller",
 		UpdateChannel:  "stable",
 		UpdateInterval: "1h",
-		DataDir:        "/opt/k7-pi-bridge/data",
+		InstallRoot:    "/opt/k7-pi-bridge",
+		DataDir:        "", // filled by normalize() to ${InstallRoot}/data
 		BackupTarget:   "",
 		LogLevel:       "info",
+	}
+}
+
+func (c *Config) normalize() {
+	if strings.TrimSpace(c.DataDir) == "" {
+		c.DataDir = c.InstallRoot + "/data"
 	}
 }
 
@@ -94,6 +102,7 @@ func Load(args []string) (Config, error) {
 	}
 
 	applyEnv(&cfg)
+	cfg.normalize()
 
 	if err := cfg.validate(); err != nil {
 		return cfg, err
