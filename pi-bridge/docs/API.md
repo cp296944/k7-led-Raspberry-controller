@@ -64,21 +64,30 @@ Legend: **F** free (pc-bridge already implements) · **P2/P3/P4** pi-bridge phas
 | `/api/time` | GET/POST | P3 | `persistent_controller_clock` |
 | `/api/output/status` | GET | P3 | live computed channel output (also the golden-vector probe) |
 | `/api/wifi/signal` | GET | P3 | link RSSI/quality |
-| `/api/warnings/status` | GET | P3/P4 | runtime warnings feed |
+| `/api/warnings/status` | GET | P3/P4 | live warnings feed (clock, lamp link, Wi-Fi, dark schedule, failed write) — done pi-v0.9.10 |
 | `/api/logs` | GET | P3 | ring-buffer log (`logs` capability) |
 
-## Setup (Phase 4)
+## Setup (`setup_portal`) — done pi-v1.0.0
 
-`setup_portal` capability — the ESP32's Wi-Fi AP onboarding becomes a pi-bridge
-settings page: lamp SSID/IP, wlan link status, update channel, factory reset.
+The ESP32's Wi-Fi AP onboarding has no shared-UI panel; on pi-bridge it becomes
+a settings modal (⚙ in the top bar) over these endpoints:
 
-## Capability flags (the ledger)
+| Endpoint | Method | Notes |
+|---|---|---|
+| `/api/setup` | GET | aggregate: `{lamp, location, update, wifi, system}` |
+| `/api/setup` | POST | `{location:{latitude,longitude,timezone}, update:{channel}}` → `config.json`; returns `{ok, restart_required:[…]}` (timezone / channel need a restart) |
+| `/api/setup/restart` | POST | `{confirm:true}` → `systemctl restart k7-pi-bridge` |
+| `/api/setup/factory-reset` | POST | `{confirm:true}` → wipe `store.json` + `effects.json` + `profiles/` (keeps `config.json`), then restart |
+
+Lamp host/port/device stay on `/api/config` (GET/POST), as upstream.
+
+## Capability flags (the ledger) — **18/18 as of pi-v1.0.0**
 
 ```
 read_lamp  push_schedule  manual_preview  profiles  community_presets
-community_presets_browse  backup_restore  fixed_lunar  siesta_baked_schedule   <- 9 free
+community_presets_browse  backup_restore  fixed_lunar  siesta_baked_schedule
 smooth_ramp  tracked_lunar  acclimation  seasonal_daylength  feed_mode
-maintenance_mode  logs  persistent_controller_clock  setup_portal              <- 9 to build
+maintenance_mode  logs  persistent_controller_clock  setup_portal
 ```
 
 `tools/parity_check.py --ref <esp32> --new <pi-bridge>` diffs the read endpoints

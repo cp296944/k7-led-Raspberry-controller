@@ -133,12 +133,12 @@ NOTE: `internal/lamp` gate is used by engine + proxy; vendored httpapi still
 opens its own per-call conns (brief, low collision risk). Unify if it bites.
 
 ### Phase 4 — Setup page + hardening  (tag `pi-v1.0`)
-- [ ] `setup_portal` equivalent (lamp SSID/IP settings page, wifi status, factory reset)
+- [x] `setup_portal` — ⚙ settings modal + `/api/setup*` (pi-v1.0.0). **18/18.**
 - [~] `/api/warnings/status` — real feed done (pi-v0.9.10); diagnostics *page* still TODO
 - [ ] 7-day soak on the Pi
-- [ ] `pi-bridge/README.md` + top-level `README.md` rewrite (user asked: explain the project for others)
+- [x] `README.md` rewrite + "Exactly what diverges from upstream" section (0.9.6+)
 - [ ] optional: PR `pi-bridge/` back to bitbarista
-- [ ] **exit gate: 18/18. `pi-v1.0`.**
+- [x] **exit gate: 18/18 — `pi-v1.0.0`.**
 
 ### Phase 5 — Home Assistant (tag `pi-v1.1`)
 - [ ] `/api/ha/*` REST surface
@@ -170,7 +170,37 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 
 ---
 
-## Current state (2026-09-08 — pi-v0.9.10 in progress)
+## Current state (2026-09-08 — pi-v1.0.0 in progress → 18/18)
+
+### pi-v1.0.0 — `setup_portal` + settings page → **18 / 18 capabilities**
+- `caps["setup_portal"] = true` in main.go (main loop now sets ALL 18 true).
+- `cmd/k7-pi-bridge/setup.go` — `setupAPI` registered by `routes()`:
+  - `GET /api/setup` — aggregate `{lamp, location, update, wifi, system}`
+  - `POST /api/setup` — `{location:{lat,lon,timezone}, update:{channel}}` →
+    validated, written to `config.json`; response `{ok, restart_required:[…]}`
+    (timezone + channel need a restart — the daemon reads config.json at boot).
+    Lat/lon are stored but nothing consumes them yet (moon math is date-only).
+  - `POST /api/setup/restart` — `{confirm:true}` → `systemctl restart k7-pi-bridge`
+  - `POST /api/setup/factory-reset` — `{confirm:true}` → wipe `store.json`,
+    `effects.json`, `profiles/` (keeps `config.json`), then restart
+- `routes()` signature gained a `*setupAPI` param; `main_test.go` updated + new
+  `TestSetupGetAndPost` / `TestSetupFactoryResetNeedsConfirm`.
+- overlay.js: **⚙ button** in the top bar → a settings modal (lamp model/IP/port
+  via existing `/api/config`; timezone/lat/lon + update channel via `/api/setup`;
+  Restart + Factory-reset buttons, both `window.confirm()` gated). `modalShell`
+  helper extracted. ~24 dict terms added.
+- Lamp host/port/device stay on `/api/config` (unchanged, upstream).
+- Verified vs mock in browser: `/api/capabilities` → all 18 true; ⚙ opens the
+  modal; saving channel+tz persists to config.json and reports
+  `restart_required:[timezone, update_channel]`.
+
+### Phase 4 remaining after this: 7-day soak, diagnostics *page* (feed is done).
+### Phase 5 = HA (`pi-v1.1`).
+
+## Current state (2026-09-08 — pi-v0.9.10 merged)
+
+**PR #12 merged. origin/master == origin/dev/pi-bridge == fcfc1f2. Release
+`pi-v0.9.10` published.**
 
 ### pi-v0.9.10 — "檢查" (Checks) panel is now a real warnings feed
 User asked what the empty "檢查" card at the bottom does. It's the shared UI's
