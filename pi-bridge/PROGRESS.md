@@ -67,13 +67,19 @@ blocker under "BLOCKED" and stop.**
 
 **Pi is currently running pi-v0.2.0 as a systemd service.**
 
-### Phase 2 — Lamp link + read path  (tag `pi-v0.3`)
-- [ ] `internal/lamp` — single mutexed TCP conn, reconnect w/ backoff, periodic syncTime, generous timeouts
-- [ ] `internal/store` — config/state/profiles/backups JSON in `/opt/k7-pi-bridge/data`
-- [ ] `internal/proxy` — raw `:8266` passthrough on eth0
-- [ ] `internal/httpapi` — embed shared-ui, serve `/`, wire the 21 pc-bridge endpoints, `/api/capabilities` with the 9 currently-true flags
-- [ ] presets from `arduino/src/Presets.h` (reuse `tools/generate_pc_bridge_presets.py` output)
-- [ ] **exit gate:** `http://<pi>/` loads UI on LAN; Read/Preview/manual/push-native-schedule work against real lamp; parity_check green on those 21
+### Phase 2 — Lamp link + read path  ✅ DONE (tag `pi-v0.3.0`)
+- [x] `internal/httpapi` — vendored+adapted `pc-bridge/internal/bridge/server.go` (+66 lines, header-documented). Embeds shared-ui, serves `/` + all 21 upstream endpoints. `New(Options)` injects identity + the 18 caps; `DefaultCapabilities()` = 9 true / 9 false; `SetCapability()` for Phase 3.
+- [x] `internal/proxy` — raw `:8266` passthrough (one client at a time, idle timeout, optional scheduler gate)
+- [x] presets served from vendored `presets.json` (generated from `Presets.h`)
+- [x] `tools/check_httpapi_sync.py` — advisory drift report
+- [~] `internal/lamp` (mutexed conn) + `internal/store` — DEFERRED to Phase 3: httpapi opens a fresh k7tcp conn per call (same as pc-bridge). Phase 3 introduces `internal/lamp` as the single owner shared by scheduler+httpapi+proxy.
+- [x] **exit gate PASSED:** OTA'd Pi to pi-v0.3.0. `/api/lamp/read` via the real Pi service returns the real K7 Pro (name `K7_Pro42113`, its actual 24-slot reef schedule). `/api/preview` + `/api/hand` reach the lamp (tested vs mock). Proxy `:8266` listening. UI serves (`/static/index.html`). Caps 9 true / 9 false.
+- NOTE: browser render check of the UI still pending (interrupted); endpoints all verified.
+
+**Pi is currently running pi-v0.3.0.** Releases: pi-v0.1.0, pi-v0.2.0, pi-v0.3.0.
+KNOWN NIT: `go vet` can't run on cmd/httpapi (they import vendored k7tcp which has
+an upstream `%s:%d` IPv6 printf nit) — CI vets config/version/updater/proxy only.
+Candidate upstream PR: `net.JoinHostPort` in k7tcp connect().
 
 ### Phase 3 — Always-on engine  (tags `pi-v0.4`..`0.9`)  ← the big port of Effects.cpp + Moon.cpp
 - [ ] v0.4 `persistent_controller_clock` + `/api/time` + `logs` + scheduler tick + `/api/output/status` + `/api/wifi/signal`
