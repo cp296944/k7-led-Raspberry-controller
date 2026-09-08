@@ -171,18 +171,27 @@
       go.className = 'k7pi-go';
       styleBtn(go); go.style.borderColor = '#4a7';
       go.onclick = function () {
+        var msg = (dict['Update to {tag} now? The service will restart.'] ||
+                   '要現在更新到 {tag} 嗎?服務會重新啟動。').replace('{tag}', d.available);
+        if (!window.confirm(msg)) return;
         go.disabled = true;
         status.textContent = dict['Restarting…'] || 'Updating…';
-        fetch('/api/update/apply', { method: 'POST' }).then(function () {
-          var tries = 0;
-          var iv = setInterval(function () {
-            tries++;
-            fetch('/api/version').then(function (r) { return r.json(); }).then(function (v) {
-              if (v.version === d.available) { clearInterval(iv); location.reload(); }
-            }).catch(function () {});
-            if (tries > 40) clearInterval(iv);
-          }, 2000);
-        });
+        fetch('/api/update/apply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirm: true, tag: d.available })
+        }).then(function (r) { return r.json().catch(function () { return {}; }); })
+          .then(function (res) {
+            if (res && res.error) { go.disabled = false; status.textContent = '✗ ' + res.error; return; }
+            var tries = 0;
+            var iv = setInterval(function () {
+              tries++;
+              fetch('/api/version').then(function (r) { return r.json(); }).then(function (v) {
+                if (v.version === d.available) { clearInterval(iv); location.reload(); }
+              }).catch(function () {});
+              if (tries > 40) clearInterval(iv);
+            }, 2000);
+          });
       };
       wrap.appendChild(go);
     }).catch(function (e) { status.textContent = '✗ ' + e; });
@@ -407,6 +416,39 @@
     if (typeof window.updateColorStrip === 'function') window.updateColorStrip();
   }
 
+  // Draw an hourly gridline on the schedule chart (upstream only rules every 4h,
+  // where its labels are). Pure draw-time plugin — no mutation of chart.options,
+  // which in Chart.js v4 triggers a proxy-setter recursion.
+  var hourGridPlugin = {
+    id: 'k7piHourGrid',
+    beforeDatasetsDraw: function (chart) {
+      var xs = chart.scales && chart.scales.x, ys = chart.scales && chart.scales.y;
+      if (!xs || !ys) return;
+      var ctx = chart.ctx;
+      ctx.save();
+      var light = document.documentElement.getAttribute('data-theme') === 'light';
+      ctx.strokeStyle = light ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.055)';
+      ctx.lineWidth = 1;
+      for (var h = 1; h < 24; h++) {
+        if (h % 4 === 0) continue; // the chart already rules these
+        var x = xs.getPixelForValue(h);
+        ctx.beginPath();
+        ctx.moveTo(x, ys.top);
+        ctx.lineTo(x, ys.bottom);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  };
+  function tuneChartAxis() {
+    var c = liveChart();
+    if (!c || c._k7piAxis) return;
+    if (!window.Chart || !window.Chart.register) return;
+    try { window.Chart.register(hourGridPlugin); } catch (e) { return; }
+    c._k7piAxis = true;
+    try { c.update('none'); } catch (e) {}
+  }
+
   function mountValueTable() {
     if (document.getElementById('k7pi-grid')) return;
     var anchor = document.getElementById('autoPanel') || document.querySelector('.chart-canvas-wrap');
@@ -429,9 +471,14 @@
   function buildGrid(body) {
     var cols = chartCols();
     var wrap = el('div');
-    var tbl = el('table'); tbl.style.cssText = 'border-collapse:collapse;font-size:0.8rem;width:100%';
-    var thead = el('tr'); thead.appendChild(cell('th', 'h'));
-    cols.forEach(function (c) { thead.appendChild(cell('th', c.label)); });
+    var tbl = el('table'); tbl.style.cssText = 'border-collapse:collapse;font-size:0.8rem;width:100%;table-layout:fixed';
+    var thead = el('tr');
+    var hc = cell('th', 'h'); hc.style.width = '52px'; thead.appendChild(hc);
+    cols.forEach(function (c) {
+      var th = cell('th', c.label);
+      th.style.whiteSpace = 'nowrap';
+      thead.appendChild(th);
+    });
     tbl.appendChild(thead);
     var inputs = [];
     for (var h = 0; h < 24; h++) {
@@ -445,7 +492,7 @@
           inp.addEventListener('change', commit);
           inp.addEventListener('input', function () { clearTimeout(inp._t); inp._t = setTimeout(commit, 250); });
           inputs[h][k] = inp;
-          var td = el('td'); td.style.padding = '2px'; td.appendChild(inp); tr.appendChild(td);
+          var td = el('td'); td.style.cssText = 'padding:2px;text-align:center'; td.appendChild(inp); tr.appendChild(td);
         });
       })(h);
       tbl.appendChild(tr);
@@ -453,7 +500,15 @@
     // live pull: chart -> grid (skip while a cell is focused)
     body._sync = function () {
       var c2 = chartCols();
-      if (c2.length !== cols.length) { body.dataset.built = ''; body.innerHTML = ''; buildGrid(body); return; }
+      // Channel set changed (device switch / hidden channels). Rebuild — but
+      // asynchronously, so a chart caught mid-update can't recurse us to death.
+      if (c2.length !== cols.length) {
+        if (!body._rebuilding) {
+          body._rebuilding = true;
+          setTimeout(function () { body._rebuilding = false; body.innerHTML = ''; buildGrid(body); }, 60);
+        }
+        return;
+      }
       for (var h = 0; h < 24; h++) for (var k = 0; k < cols.length; k++) {
         var inp = inputs[h][k];
         if (document.activeElement === inp) continue;
@@ -509,24 +564,23 @@
     .then(function (d) { delete d._note; dict = d; })
     .catch(function () {})
     .finally(function () {
+      // Each step is independent: a slow/absent chart must not stop the header
+      // controls, and a transient Chart.js hiccup must not stop the value table.
+      // Keep retrying every step until it has taken hold (or ~15s elapses).
+      var steps = [retranslateAll, mountHeaderControls, mountWifi, mountWrites,
+                   tuneChartAxis, mountValueTable, mountVersionChangelog, installExplicitApply];
+      var run = function () {
+        steps.forEach(function (fn) { try { fn(); } catch (e) { /* retry next tick */ } });
+      };
       var start = function () {
-        retranslateAll();
-        mountHeaderControls();
-        mountWifi();
-        mountWrites();
-        mountValueTable();
-        mountVersionChangelog();
-        installExplicitApply();
-        // the page's own script may define api() slightly after us
+        run();
         var tries = 0;
         var iv = setInterval(function () {
-          installExplicitApply();
-          mountHeaderControls();
-          mountWifi();
-          mountWrites();
-          mountValueTable();
-        mountVersionChangelog();
-          if (installExplicitApply.done || ++tries > 40) clearInterval(iv);
+          run();
+          var settled = installExplicitApply.done &&
+                        document.getElementById('k7pi-grid') &&
+                        (liveChart() ? liveChart()._k7piAxis : true);
+          if (settled || ++tries > 60) clearInterval(iv);
         }, 250);
         new MutationObserver(function (muts) {
           muts.forEach(function (m) {

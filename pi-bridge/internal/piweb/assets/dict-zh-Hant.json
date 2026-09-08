@@ -126,6 +126,7 @@
   "manual": "手動",
   "Lamp writes since local midnight": "本地午夜起對燈的寫入次數",
   "engine live-driving": "engine 即時驅動中",
+  "Update to {tag} now? The service will restart.": "要現在更新到 {tag} 嗎?服務會重新啟動。",
   "Load from device": "從裝置讀取",
   "Edits sync with the chart live; press ⬆ Push to send.": "編輯與上方圖表即時連動;按 ⬆ Push 才送到燈。",
   "View release history": "查看更新歷程",

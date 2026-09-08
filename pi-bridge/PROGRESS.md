@@ -170,6 +170,38 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 
 ---
 
+## Current state (2026-09-08 — pi-v0.9.8 in progress)
+
+### pi-v0.9.8 — 3 user reports + a value-table crash fix
+1. **"it auto-updated again without me ticking Auto"** — investigated on the Pi:
+   `config.json` has `auto_update:false` and the hourly loop honoured it (journal:
+   `"update available (auto_update off — apply from the UI)"`). The updates all
+   came from `POST /api/update/apply` (no timer, no cron, shared-ui doesn't call
+   it — only the overlay's green "立即更新" button does). Hardened anyway:
+   `/api/update/apply` now requires `{"confirm":true,"tag":"<exact target>"}` —
+   a bare/replayed POST is 400'd; wrong tag is 409'd. Overlay's "立即更新" now
+   shows a `window.confirm()` and sends the confirm+tag body.
+2. **hourly X-axis gridlines** — `hourGridPlugin` (a draw-time Chart.js plugin,
+   registered via `Chart.register`, NOT an options mutation — mutating
+   `chart.options.scales` in Chart.js v4 recurses the proxy setters and throws
+   `Maximum call stack size exceeded`). Rules every non-4h hour.
+3. **value-table number alignment** — `table-layout:fixed`, equal 79px channel
+   columns, centered input `<td>`s. Header text and cell values now share a
+   center-x.
+- **BUG FIXED (was breaking the value table since 0.9.7 on some loads):** the
+  grid's `_sync` could call `buildGrid` synchronously while `buildGrid` calls
+  `_sync` at its end → infinite recursion → `Maximum call stack size exceeded`
+  in Chart.js internals → `start()` aborted before `mountValueTable`. `_sync`
+  now defers the rebuild (`setTimeout`, `_rebuilding` guard). Boot loop
+  rewritten: every step wrapped in try/catch and retried until it takes hold
+  (was: stopped as soon as `installExplicitApply.done`).
+- `/api/warnings/status` now returns `200 {warnings:[],count:0}` (was 404 —
+  Phase 4 replaces it with a real feed) to stop the shared UI logging a 404 on
+  every poll.
+- Verified vs mock in browser: grid mounts, axis plugin registered, columns
+  aligned, zero console errors; `/api/update/apply` gate tested via curl +
+  `main_test.go`.
+
 ## Current state (2026-09-08 — pi-v0.9.7 merged)
 
 **PR #9 merged. origin/master == origin/dev/pi-bridge == 65ff115. Release
