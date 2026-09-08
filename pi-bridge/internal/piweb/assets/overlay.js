@@ -50,63 +50,84 @@
     return e;
   }
 
-  function mountBar() {
-    if (document.getElementById('k7pi-bar')) return;
-    var bar = el('div', { id: 'k7pi-bar' });
-    bar.style.cssText =
-      'position:fixed;right:10px;bottom:10px;z-index:99999;display:flex;gap:6px;' +
-      'align-items:center;font:12px/1.4 system-ui,sans-serif;background:rgba(20,22,28,.92);' +
-      'color:#e8e8e8;border:1px solid #3a3f4b;border-radius:8px;padding:6px 8px;box-shadow:0 4px 16px rgba(0,0,0,.35)';
+  var LANGS = [
+    { code: 'zh-Hant', label: '繁體中文' },
+    { code: 'en', label: 'English' }
+  ];
 
-    var langBtn = el('button', { textContent: lang === 'zh-Hant' ? 'EN' : '中' });
-    styleBtn(langBtn);
-    langBtn.onclick = function () {
-      lang = lang === 'zh-Hant' ? 'en' : 'zh-Hant';
-      localStorage.setItem(LS_LANG, lang);
+  // Header controls live in the upstream .topbar, right after the version chip.
+  function mountHeaderControls() {
+    var old = document.getElementById('k7pi-bar');
+    if (old) old.remove();
+    if (document.getElementById('k7pi-hdr')) return true;
+    var bar = document.querySelector('.topbar');
+    var anchor = document.getElementById('versionChip') || (bar && bar.querySelector('h1'));
+    if (!bar || !anchor) return false;
+
+    var wrap = el('span', { id: 'k7pi-hdr' });
+    wrap.style.cssText = 'display:inline-flex;gap:6px;align-items:center';
+
+    // update button + inline status
+    var updBtn = el('button', { type: 'button', textContent: dict['Check for updates'] || 'Check for updates' });
+    styleBtn(updBtn);
+    var status = el('span', { id: 'k7pi-upd' });
+    status.style.cssText = 'font-size:0.78rem;color:var(--muted,#8a95a3)';
+    updBtn.onclick = function () { checkUpdate(status, wrap); };
+
+    // language dropdown
+    var sel = el('select', { id: 'k7pi-lang', title: 'Language / 語言' });
+    sel.style.cssText =
+      'background:var(--surface2,#2a2e38);border:1px solid var(--border,#444a58);color:var(--text,#e8e8e8);' +
+      'border-radius:6px;padding:3px 6px;font-size:0.8rem;font-family:inherit;cursor:pointer';
+    LANGS.forEach(function (l) {
+      var o = el('option', { value: l.code, textContent: l.label });
+      if (l.code === lang) o.selected = true;
+      sel.appendChild(o);
+    });
+    sel.onchange = function () {
+      localStorage.setItem(LS_LANG, sel.value);
       location.reload();
     };
 
-    var updBtn = el('button', { textContent: dict['Check for updates'] || 'Check for updates' });
-    styleBtn(updBtn);
-    var status = el('span', { id: 'k7pi-upd', textContent: '' });
-    status.style.opacity = '.85';
+    wrap.appendChild(updBtn);
+    wrap.appendChild(status);
+    wrap.appendChild(sel);
+    anchor.parentNode.insertBefore(wrap, anchor.nextSibling);
+    return true;
+  }
 
-    updBtn.onclick = function () {
-      status.textContent = '…';
-      fetch('/api/update/status').then(function (r) { return r.json(); }).then(function (d) {
-        if (d.error) { status.textContent = '✗ ' + d.error; return; }
-        if (d.up_to_date) { status.textContent = (dict['Up to date'] || 'Up to date') + ' · ' + d.current; return; }
-        status.textContent = (dict['Update available'] || 'Update available') + ': ' + d.available;
-        var go = el('button', { textContent: dict['Update now'] || 'Update now' });
-        styleBtn(go); go.style.borderColor = '#4a7';
-        go.onclick = function () {
-          go.disabled = true;
-          status.textContent = dict['Restarting…'] || 'Updating…';
-          fetch('/api/update/apply', { method: 'POST' }).then(function () {
-            var tries = 0;
-            var iv = setInterval(function () {
-              tries++;
-              fetch('/api/version').then(function (r) { return r.json(); }).then(function (v) {
-                if (v.version === d.available) { clearInterval(iv); location.reload(); }
-              }).catch(function () {});
-              if (tries > 40) clearInterval(iv);
-            }, 2000);
-          });
-        };
-        bar.appendChild(go);
-      }).catch(function (e) { status.textContent = '✗ ' + e; });
-    };
-
-    bar.appendChild(langBtn);
-    bar.appendChild(updBtn);
-    bar.appendChild(status);
-    document.body.appendChild(bar);
+  function checkUpdate(status, wrap) {
+    status.textContent = '…';
+    fetch('/api/update/status').then(function (r) { return r.json(); }).then(function (d) {
+      if (d.error) { status.textContent = '✗ ' + d.error; return; }
+      if (d.up_to_date) { status.textContent = (dict['Up to date'] || 'Up to date') + ' · ' + d.current; return; }
+      status.textContent = (dict['Update available'] || 'Update available') + ': ' + d.available;
+      if (wrap.querySelector('.k7pi-go')) return;
+      var go = el('button', { type: 'button', textContent: dict['Update now'] || 'Update now' });
+      go.className = 'k7pi-go';
+      styleBtn(go); go.style.borderColor = '#4a7';
+      go.onclick = function () {
+        go.disabled = true;
+        status.textContent = dict['Restarting…'] || 'Updating…';
+        fetch('/api/update/apply', { method: 'POST' }).then(function () {
+          var tries = 0;
+          var iv = setInterval(function () {
+            tries++;
+            fetch('/api/version').then(function (r) { return r.json(); }).then(function (v) {
+              if (v.version === d.available) { clearInterval(iv); location.reload(); }
+            }).catch(function () {});
+            if (tries > 40) clearInterval(iv);
+          }, 2000);
+        });
+      };
+      wrap.appendChild(go);
+    }).catch(function (e) { status.textContent = '✗ ' + e; });
   }
 
   function styleBtn(b) {
     b.style.cssText =
-      'background:#2a2e38;color:#e8e8e8;border:1px solid #444a58;border-radius:6px;' +
-      'padding:3px 8px;cursor:pointer;font:inherit';
+      'background:var(--surface2,#2a2e38);color:var(--text,#e8e8e8);border:1px solid var(--border,#444a58);' +
+      'border-radius:6px;padding:3px 9px;cursor:pointer;font:inherit;font-size:0.8rem;line-height:1.4';
   }
 
   // ---- explicit-apply: nothing reaches the lamp until the user hits Push ----
@@ -154,6 +175,22 @@
       var om = window.onModeToggle;
       window.onModeToggle = function () { var r = om.apply(this, arguments); setDirty(true); return r; };
     }
+    // "Shift" only affects the *Effective Today* view and the push — Base mode
+    // never moves. Make that visible: on shift, jump to Effective + explain.
+    if (typeof window.changeShift === 'function' && !window.changeShift._k7pi) {
+      var ocs = window.changeShift;
+      window.changeShift = function () {
+        var r = ocs.apply(this, arguments);
+        try {
+          if (typeof window.setChartMode === 'function') window.setChartMode('effective');
+        } catch (e) {}
+        setDirty(true);
+        toast(dict['Shift preview — press Push to apply to the lamp'] ||
+              '時段平移:圖表已切到「今日實際」預覽,按 ⬆ Push 才會套用到燈');
+        return r;
+      };
+      window.changeShift._k7pi = true;
+    }
     var style = document.createElement('style');
     style.textContent =
       '.k7pi-dirty{outline:2px solid #e0a53a !important;outline-offset:1px;animation:k7pipulse 1.6s ease-in-out infinite}' +
@@ -181,12 +218,13 @@
     .finally(function () {
       var start = function () {
         retranslateAll();
-        mountBar();
+        mountHeaderControls();
         installExplicitApply();
         // the page's own script may define api() slightly after us
         var tries = 0;
         var iv = setInterval(function () {
           installExplicitApply();
+          mountHeaderControls();
           if (installExplicitApply.done || ++tries > 40) clearInterval(iv);
         }, 250);
         new MutationObserver(function (muts) {

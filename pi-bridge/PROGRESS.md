@@ -138,6 +138,32 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 - [ ] `homeassistant/k7_lamp/` custom integration (light, 6×number, switch, select, buttons, binary_sensor, sensor)
 - [ ] install into `D:\HomeAssistant\custom_components\k7_lamp\`
 
+### User-requested features (queue — slot into a tag when reached)
+- [x] UX-1 (pi-v0.5.1): move 檢查更新 + language INTO the `.topbar` (after versionChip);
+  language is a `<select>` dropdown (LANGS array, easy to add locales). Removes
+  the bottom-right floating bar.
+- [x] UX-2 (pi-v0.5.1): Shift discoverability — overlay overrides `changeShift`
+  to jump the chart to "Effective Today" + toast "按 Push 生效". (Shift math
+  already works: `/api/push` with `schedule_shift_minutes` → piweb rotates the
+  24 rows. Verified on Pi: +6h moved an 08-16 band to 14-22.) Root cause of
+  "光譜不會移動": upstream Base chart mode never renders the shift, and
+  explicit-apply (pi-v0.4.1, user-requested) means it needs a Push.
+- [ ] **FEAT-A: manual hourly value table** — a "逐時數值表" like the user's own
+  `D:\HomeAssistant\K7\K7_QR_Generator\k7profilegeneratoroffline.html`: an
+  editable 24-row × 6-channel number grid (type exact %), plus that tool's
+  "整體位移工具" (rotate curve ±1h per checked channel, power ±1%). The shared
+  UI only has drag-to-edit. Approach: overlay.js injects a collapsible panel
+  under the chart that reads/writes the page's schedule via a small bridge
+  (needs a hook — `scheduleBase` is a `let`, so add a getter/setter through
+  `window` or drive it via `updateChart` + a synthetic drag, OR simplest:
+  the panel POSTs its own grid straight to `/api/push`). Target: pi-v0.6.x or
+  a dedicated pi-v0.10.
+- [ ] **FEAT-B: move working dir** `D:\HomeAssistant\K7\k7-led-controller` →
+  `D:\HomeAssistant\K7\K7_Pi_Wifi_Controller`. Must also update: this file's
+  "Hard rules" path, the scheduled task prompt
+  (`k7-pi-bridge-build-resume/SKILL.md`), `_archive` copy path, any absolute
+  paths in scripts. Do at a clean checkpoint (all committed), not mid-feature.
+
 ---
 
 ## Current state (2026-09-08)
