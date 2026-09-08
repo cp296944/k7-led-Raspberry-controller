@@ -124,9 +124,13 @@ Candidate upstream PR: `net.JoinHostPort` in k7tcp connect().
 ---
 
 ## Current state (2026-09-08)
-- **PR #1 MERGED** (Phases 0–2.5). Phase 3 work → PR #2 on `dev/pi-bridge`.
-- **Pi is running `pi-v0.4.0`** (systemd service, :80 + proxy :8266).
-- Releases: pi-v0.1.0 … pi-v0.4.0. Capabilities: **9 / 18**.
+- **PR #1 MERGED** (Phases 0–2.5). Phase 3 work → PR #2 on `dev/pi-bridge`
+  (also carries the pi-v0.4.1 UX fix until merged).
+- **Pi is running `pi-v0.4.1`** (systemd service, :80 + proxy :8266).
+- Releases: pi-v0.1.0 … pi-v0.4.1. Capabilities: **9 / 18**.
+- master branch protected: no force-push, no deletion (no review requirement).
+- pi-v0.4.1: explicit-apply — overlay.js neuters upstream's auto-push; master/
+  shift/mode edits stay local until the user presses ⬆ Push (dirty indicator).
 - Real lamp verified: MAC `4a:55:19:ec:b0:49`, profiles migrated to
   `data/profiles/mac-4a_55_19_ec_b0_49/` (user's `BRS_AB`, `K7_Pro42113`).
 - User confirmed the UI renders + works in a browser.
