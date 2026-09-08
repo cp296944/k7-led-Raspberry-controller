@@ -239,15 +239,13 @@
       if (typeof orig !== 'function') return;
       window[fn] = async function () {
         try { await window.api('POST', '/api/master', { value: curMaster() }); } catch (e) {}
-        var sv = document.getElementById('shiftVal');
-        var hadShift = fn === 'pushSchedule' && sv && sv.textContent.trim() !== '+0h';
         var r = await orig.apply(this, arguments);
         setDirty(false);
-        // The server rotated the 24 rows by the shift and now reports shift = 0.
-        // Re-read so the Base chart shows the rotated schedule and the counter
-        // resets — otherwise the next Push would shift it a second time.
-        if (hadShift && typeof window.readFromDevice === 'function') {
-          try { await window.readFromDevice(); } catch (e) {}
+        // The rotation is already baked into the rows we just pushed, so clear
+        // the running "shifted by" readout.
+        if (fn === 'pushSchedule') {
+          var sv = document.getElementById('shiftVal');
+          if (sv) { sv.setAttribute('data-k7pi', '0'); sv.textContent = '+0h'; }
         }
         return r;
       };
@@ -255,22 +253,6 @@
     if (typeof window.onModeToggle === 'function') {
       var om = window.onModeToggle;
       window.onModeToggle = function () { var r = om.apply(this, arguments); setDirty(true); return r; };
-    }
-    // ── Shift fix ──────────────────────────────────────────────────────────
-    // Upstream's "Effective Today" curve applies seasonal shift, siesta and
-    // lunar — but NOT the manual "時段平移" (dayShift). So +2h and +4h render
-    // identically. We wrap chartEffectiveValueAtMins to also rotate the lookup
-    // by the current shift (read from the #shiftVal label), matching the
-    // server-side row rotation piweb does on /api/push.
-    if (typeof window.chartEffectiveValueAtMins === 'function' && !window.chartEffectiveValueAtMins._k7pi) {
-      var oCEV = window.chartEffectiveValueAtMins;
-      window.chartEffectiveValueAtMins = function (mins, ci) {
-        var lbl = document.getElementById('shiftVal');
-        var sh = lbl ? (parseInt(lbl.textContent, 10) || 0) : 0; // "+2h" -> 2
-        var w = window._wrapMins || function (m) { return ((m % 1440) + 1440) % 1440; };
-        return oCEV(w(mins - sh * 60), ci);
-      };
-      window.chartEffectiveValueAtMins._k7pi = true;
     }
     // ── Read fix ──────────────────────────────────────────────────────────
     // Upstream's readFromDevice() only does a live lamp readAll (0x1008) when
@@ -290,18 +272,27 @@
       };
       window.readFromDevice._k7pi = true;
     }
+    // ── Shift: rotate the Base schedule for real ──────────────────────────
+    // Upstream's changeShift only bumps a `dayShift` counter that the Base chart
+    // never renders (so it "does nothing"), and our old wrap forced the chart to
+    // "Effective Today" to fake a preview. Instead: rotate the actual 24 rows on
+    // the Base chart now. `k7pi-pending-shift` on #shiftVal is just a running
+    // readout; it resets to +0h after Push. dayShift stays 0 so the server does
+    // NOT rotate a second time.
     if (typeof window.changeShift === 'function' && !window.changeShift._k7pi) {
-      var ocs = window.changeShift;
-      window.changeShift = function () {
-        var r = ocs.apply(this, arguments);
-        try {
-          if (typeof window.setChartMode === 'function') window.setChartMode('effective');
-          else if (typeof window.updateChart === 'function') window.updateChart();
-        } catch (e) {}
+      window.changeShift = function (delta) {
+        delta = delta || 0;
+        rotateScheduleHours(delta);
+        var sv = document.getElementById('shiftVal');
+        if (sv) {
+          var n = (parseInt(sv.getAttribute('data-k7pi') || '0', 10) + delta);
+          n = ((n % 24) + 24) % 24;
+          sv.setAttribute('data-k7pi', String(n));
+          sv.textContent = n === 0 ? '+0h' : (n <= 12 ? '+' + n + 'h' : '-' + (24 - n) + 'h');
+        }
         setDirty(true);
-        toast(dict['Shift preview — press Push to apply to the lamp'] ||
-              '時段平移:圖表已切到「今日實際」預覽,按 ⬆ Push 才會套用到燈');
-        return r;
+        toast(dict['Schedule shifted — press ⬆ Push to send'] ||
+              '排程已平移,按 ⬆ Push 送到燈');
       };
       window.changeShift._k7pi = true;
     }
@@ -414,6 +405,36 @@
     }
     if (c) c.update('none');
     if (typeof window.updateColorStrip === 'function') window.updateColorStrip();
+  }
+
+  // Rotate the WHOLE schedule (all 6 channels) by `delta` hours, in place, on the
+  // Base chart — new[h] = old[h - delta]. Writes through the page's own
+  // dragData.onDrag so scheduleBase (what Push sends) really moves. This is what
+  // the "Shift" ◀▶ buttons do now: no mode-switch, the Base curve visibly moves.
+  function rotateScheduleHours(delta) {
+    delta = ((Math.round(delta) % 24) + 24) % 24;
+    if (!delta) return;
+    var c = liveChart();
+    if (!c) return;
+    var cols = chartCols();
+    if (!cols.length) return;
+    if (typeof window.setChartMode === 'function') window.setChartMode('base');
+    var cur = [];
+    for (var h = 0; h < 24; h++) { cur[h] = []; for (var k = 0; k < cols.length; k++) cur[h][k] = gridCellVal(cols[k].ds, h); }
+    var cfgD = c._dragDataConfig || (c.options.plugins && c.options.plugins.dragData);
+    for (var h2 = 0; h2 < 24; h2++) {
+      var srcH = ((h2 - delta) % 24 + 24) % 24;
+      for (var k2 = 0; k2 < cols.length; k2++) {
+        var v = cur[srcH][k2];
+        if (cfgD && typeof cfgD.onDrag === 'function') cfgD.onDrag(null, cols[k2].ds, h2, v);
+        else c.data.datasets[cols[k2].ds].data[h2] = v;
+      }
+    }
+    if (typeof window.applyMaster === 'function') { try { window.applyMaster(); } catch (e) {} }
+    if (typeof window.updateChart === 'function') { try { window.updateChart(); } catch (e) {} }
+    else c.update('none');
+    if (typeof window.updateColorStrip === 'function') window.updateColorStrip();
+    if (typeof window.updateNowBars === 'function') window.updateNowBars();
   }
 
   // Draw an hourly gridline on the schedule chart (upstream only rules every 4h,
