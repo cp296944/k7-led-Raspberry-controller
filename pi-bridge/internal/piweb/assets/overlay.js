@@ -74,6 +74,21 @@
     status.style.cssText = 'font-size:0.78rem;color:var(--muted,#8a95a3)';
     updBtn.onclick = function () { checkUpdate(status, wrap); };
 
+    // auto-update toggle (persisted server-side)
+    var autoLbl = el('label', { title: 'Auto-apply updates' });
+    autoLbl_style(autoLbl);
+    var autoCb = el('input', { type: 'checkbox' });
+    autoCb.onchange = function () {
+      fetch('/api/update/config', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auto_update: autoCb.checked })
+      }).catch(function () {});
+    };
+    autoLbl.appendChild(autoCb);
+    autoLbl.appendChild(document.createTextNode(dict['Auto'] || 'Auto'));
+    fetch('/api/update/status').then(function (r) { return r.json(); })
+      .then(function (d) { autoCb.checked = !!d.auto_update; }).catch(function () {});
+
     // language dropdown
     var sel = el('select', { id: 'k7pi-lang', title: 'Language / 語言' });
     sel.style.cssText =
@@ -90,10 +105,14 @@
     };
 
     wrap.appendChild(updBtn);
+    wrap.appendChild(autoLbl);
     wrap.appendChild(status);
     wrap.appendChild(sel);
     anchor.parentNode.insertBefore(wrap, anchor.nextSibling);
     return true;
+  }
+  function autoLbl_style(l) {
+    l.style.cssText = 'display:inline-flex;gap:3px;align-items:center;font-size:0.76rem;color:var(--muted,#8a95a3);cursor:pointer';
   }
 
   function checkUpdate(status, wrap) {
@@ -175,14 +194,29 @@
       var om = window.onModeToggle;
       window.onModeToggle = function () { var r = om.apply(this, arguments); setDirty(true); return r; };
     }
-    // "Shift" only affects the *Effective Today* view and the push — Base mode
-    // never moves. Make that visible: on shift, jump to Effective + explain.
+    // ── Shift fix ──────────────────────────────────────────────────────────
+    // Upstream's "Effective Today" curve applies seasonal shift, siesta and
+    // lunar — but NOT the manual "時段平移" (dayShift). So +2h and +4h render
+    // identically. We wrap chartEffectiveValueAtMins to also rotate the lookup
+    // by the current shift (read from the #shiftVal label), matching the
+    // server-side row rotation piweb does on /api/push.
+    if (typeof window.chartEffectiveValueAtMins === 'function' && !window.chartEffectiveValueAtMins._k7pi) {
+      var oCEV = window.chartEffectiveValueAtMins;
+      window.chartEffectiveValueAtMins = function (mins, ci) {
+        var lbl = document.getElementById('shiftVal');
+        var sh = lbl ? (parseInt(lbl.textContent, 10) || 0) : 0; // "+2h" -> 2
+        var w = window._wrapMins || function (m) { return ((m % 1440) + 1440) % 1440; };
+        return oCEV(w(mins - sh * 60), ci);
+      };
+      window.chartEffectiveValueAtMins._k7pi = true;
+    }
     if (typeof window.changeShift === 'function' && !window.changeShift._k7pi) {
       var ocs = window.changeShift;
       window.changeShift = function () {
         var r = ocs.apply(this, arguments);
         try {
           if (typeof window.setChartMode === 'function') window.setChartMode('effective');
+          else if (typeof window.updateChart === 'function') window.updateChart();
         } catch (e) {}
         setDirty(true);
         toast(dict['Shift preview — press Push to apply to the lamp'] ||
@@ -210,6 +244,155 @@
     setTimeout(function () { d.remove(); }, 4000);
   }
 
+  // ---- Wi-Fi signal indicator (in the topbar) ---------------------------
+  function mountWifi() {
+    var hdr = document.getElementById('k7pi-hdr');
+    if (!hdr || document.getElementById('k7pi-wifi')) return;
+    var w = el('span', { id: 'k7pi-wifi', title: 'Wi-Fi to lamp' });
+    w.style.cssText = 'font-size:0.78rem;padding:2px 6px;border-radius:5px;border:1px solid var(--border,#444a58);white-space:nowrap';
+    hdr.appendChild(w);
+    var poll = function () {
+      fetch('/api/wifi/signal').then(function (r) { return r.json(); }).then(function (d) {
+        var q = d.quality, r = d.rssi_dbm;
+        if (q == null) { w.textContent = '📶 —'; w.style.color = 'var(--muted,#8a95a3)'; return; }
+        w.textContent = '📶 ' + q + '%' + (r != null ? ' (' + r + 'dBm)' : '');
+        w.style.color = q >= 55 ? '#4caf50' : q >= 35 ? '#e0a53a' : '#e05a5a';
+        w.title = 'Wi-Fi to lamp · RSSI ' + r + ' dBm' + (d.tx_bitrate_mbps ? ' · ' + d.tx_bitrate_mbps + ' Mbps' : '') +
+                  (d.lamp && d.lamp.ok ? ' · lamp OK' : ' · lamp: no recent contact');
+      }).catch(function () {});
+    };
+    poll();
+    setInterval(poll, 15000);
+  }
+
+  // ---- FEAT-A: manual hourly value table -------------------------------
+  // A self-contained 24×6 editable grid (type exact %), a ±1h rotate and a
+  // ±1% power nudge, and "套用到燈" which POSTs straight to /api/push. It never
+  // needs the page's chart internals; "從裝置載入" seeds it from /api/state.
+  var K7PRO_CH = ['white', 'royal_blue', 'green', 'uv', 'cyan', 'red'];
+  var CH_LABEL = { white: 'White', royal_blue: 'Royal Blue', green: 'Green', uv: 'UV', cyan: 'Cyan', red: 'Red' };
+
+  function mountValueTable() {
+    if (document.getElementById('k7pi-grid')) return;
+    var anchor = document.getElementById('autoPanel') || document.querySelector('.chart-canvas-wrap');
+    if (!anchor) return;
+
+    var box = el('div', { id: 'k7pi-grid' });
+    box.style.cssText = 'margin-top:10px;border:1px solid var(--border,#2c343d);border-radius:8px;background:var(--surface,#1c2229);overflow:hidden';
+
+    var head = el('button', { type: 'button', className: 'k7pi-grid-head' });
+    head.textContent = (dict['Hourly value table'] || '逐時數值表') + '  ▾';
+    head.style.cssText = 'width:100%;text-align:left;background:transparent;border:0;color:var(--text,#e7ecf1);' +
+      'padding:8px 12px;cursor:pointer;font:inherit;font-weight:600';
+    var body = el('div'); body.hidden = true; body.style.cssText = 'padding:10px 12px 14px';
+    head.onclick = function () {
+      body.hidden = !body.hidden;
+      head.textContent = (dict['Hourly value table'] || '逐時數值表') + (body.hidden ? '  ▾' : '  ▴');
+      if (!body.hidden && !body.dataset.built) { buildGrid(body); body.dataset.built = '1'; }
+    };
+    box.appendChild(head); box.appendChild(body);
+    anchor.appendChild(box);
+  }
+
+  function buildGrid(body) {
+    var chs = K7PRO_CH; // device sel could refine this later
+    var tbl = el('table');
+    tbl.style.cssText = 'border-collapse:collapse;font-size:0.8rem;width:100%';
+    var thead = el('tr');
+    thead.appendChild(cell('th', 'h'));
+    chs.forEach(function (c) { thead.appendChild(cell('th', dict[CH_LABEL[c]] || CH_LABEL[c])); });
+    tbl.appendChild(thead);
+    var inputs = [];
+    for (var h = 0; h < 24; h++) {
+      var tr = el('tr'); inputs[h] = [];
+      tr.appendChild(cell('td', (h < 10 ? '0' : '') + h + ':00'));
+      for (var ci = 0; ci < 6; ci++) {
+        var inp = el('input', { type: 'number', min: 0, max: 100, value: 0 });
+        inp.style.cssText = 'width:46px;background:var(--surface2,#262e37);border:1px solid var(--border,#2c343d);' +
+          'color:var(--text,#e7ecf1);border-radius:4px;padding:2px 4px;text-align:center;font:inherit';
+        inputs[h][ci] = inp;
+        var td = el('td'); td.style.padding = '2px'; td.appendChild(inp); tr.appendChild(td);
+      }
+      tbl.appendChild(tr);
+    }
+
+    var read = function () {
+      return inputs.map(function (row, h) {
+        return [h, 0].concat(row.map(function (i) { return clampv(parseInt(i.value, 10) || 0); }));
+      });
+    };
+    var write = function (rows) {
+      for (var h = 0; h < 24 && h < rows.length; h++)
+        for (var ci = 0; ci < 6; ci++) inputs[h][ci].value = rows[h][2 + ci] != null ? rows[h][2 + ci] : 0;
+    };
+
+    var checks = el('div'); checks.style.cssText = 'display:flex;gap:10px;flex-wrap:wrap;margin:8px 0;font-size:0.8rem';
+    var chk = {};
+    chs.forEach(function (c) {
+      var l = el('label'); l.style.cssText = 'display:inline-flex;gap:3px;align-items:center;cursor:pointer';
+      var cb = el('input', { type: 'checkbox', checked: true }); chk[c] = cb;
+      l.appendChild(cb); l.appendChild(document.createTextNode(dict[CH_LABEL[c]] || CH_LABEL[c]));
+      checks.appendChild(l);
+    });
+
+    var bar = el('div'); bar.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-top:8px';
+    var mk = function (txt, fn) { var b = el('button', { type: 'button', textContent: txt }); styleBtn(b); b.onclick = fn; return b; };
+    var rotate = function (dir) { // dir +1 = later
+      var rows = read();
+      var out = rows.map(function (r, h) {
+        var srcH = ((h - dir) % 24 + 24) % 24;
+        var nr = [h, 0];
+        for (var ci = 0; ci < 6; ci++) nr.push(chk[chs[ci]].checked ? rows[srcH][2 + ci] : rows[h][2 + ci]);
+        return nr;
+      });
+      write(out);
+    };
+    var power = function (delta) {
+      var rows = read();
+      write(rows.map(function (r, h) {
+        var nr = [h, 0];
+        for (var ci = 0; ci < 6; ci++) nr.push(chk[chs[ci]].checked ? clampv(rows[h][2 + ci] + delta) : rows[h][2 + ci]);
+        return nr;
+      }));
+    };
+
+    bar.appendChild(mk(dict['Load from device'] || '從裝置載入', function () {
+      fetch('/api/state').then(function (r) { return r.json(); }).then(function (s) {
+        if (s.schedule && s.schedule.length === 24) write(s.schedule);
+        toast(dict['Loaded from device'] || '已從裝置載入');
+      });
+    }));
+    bar.appendChild(mk('⟲ -1h', function () { rotate(-1); }));
+    bar.appendChild(mk('⟳ +1h', function () { rotate(1); }));
+    bar.appendChild(mk('－1%', function () { power(-1); }));
+    bar.appendChild(mk('＋1%', function () { power(1); }));
+    var apply = mk('⬆ ' + (dict['Apply to lamp'] || '套用到燈'), function () {
+      apply.disabled = true;
+      fetch('/api/push', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ manual: [0, 0, 0, 0, 0, 0], schedule: read(), mode: 'auto' })
+      }).then(function (r) { return r.json(); }).then(function () {
+        toast(dict['Sent to lamp'] || '已送出到燈');
+        if (window.readFromDevice) try { window.readFromDevice(); } catch (e) {}
+      }).finally(function () { apply.disabled = false; });
+    });
+    apply.style.borderColor = '#4a7';
+    bar.appendChild(apply);
+
+    body.appendChild(el('div', { textContent: dict['Type each hour’s % per channel, then 套用.'] || '直接輸入每個整點各通道的 %,再按「套用到燈」。' }, []));
+    body.lastChild.style.cssText = 'font-size:0.78rem;color:var(--muted,#93a1af);margin-bottom:8px';
+    var scroll = el('div'); scroll.style.cssText = 'max-height:340px;overflow:auto'; scroll.appendChild(tbl);
+    body.appendChild(scroll);
+    body.appendChild(checks);
+    body.appendChild(bar);
+  }
+  function cell(tag, txt) {
+    var c = el(tag, { textContent: txt });
+    c.style.cssText = 'padding:3px 6px;border-bottom:1px solid var(--border,#2c343d);color:var(--muted,#93a1af);text-align:center';
+    return c;
+  }
+  function clampv(v) { return v < 0 ? 0 : v > 100 ? 100 : v; }
+
   // ---- boot ---------------------------------------------------------------
   fetch('/pi/dict-zh-Hant.json')
     .then(function (r) { return r.json(); })
@@ -219,12 +402,16 @@
       var start = function () {
         retranslateAll();
         mountHeaderControls();
+        mountWifi();
+        mountValueTable();
         installExplicitApply();
         // the page's own script may define api() slightly after us
         var tries = 0;
         var iv = setInterval(function () {
           installExplicitApply();
           mountHeaderControls();
+          mountWifi();
+          mountValueTable();
           if (installExplicitApply.done || ++tries > 40) clearInterval(iv);
         }, 250);
         new MutationObserver(function (muts) {

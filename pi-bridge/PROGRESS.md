@@ -7,8 +7,9 @@ blocker under "BLOCKED" and stop.**
 
 ## Hard rules for any session working this
 
-- Work only on branch `dev/pi-bridge` in `D:\HomeAssistant\K7\k7-led-controller`.
-  Never commit to `master`. Never `git push --force`.
+- Work only on branch `dev/pi-bridge` in `D:\HomeAssistant\K7\K7_Pi_Wifi_Controller`.
+  (Renamed from `k7-led-controller` in pi-v0.5.5. ESP32 flash scripts are in the
+  sibling `..\esp32-flash-experiment\`.) Never commit to `master`. Never `git push --force`.
 - Git identity is repo-local: `cp296944` / `cp296944@gmail.com` (already set).
 - `gh` CLI is authed as `cp296944` — pushing works.
 - Go: `C:\Program Files\Go\bin\go.exe` (1.27.0). arm64 cross-compile verified.
@@ -139,6 +140,17 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 - [ ] install into `D:\HomeAssistant\custom_components\k7_lamp\`
 
 ### User-requested features (queue — slot into a tag when reached)
+- [x] **FEAT-A done (pi-v0.5.5)**: overlay.js injects a collapsible "逐時數值表" —
+  self-contained 24×6 editable % grid + ±1h rotate + ±1% power (per checked
+  channel) + 從裝置載入 (`/api/state`) + 套用到燈 (POSTs the grid to `/api/push`).
+- [x] **FEAT-B done (pi-v0.5.5)**: working dir renamed
+  `k7-led-controller` → `K7_Pi_Wifi_Controller`; ESP32 flash scripts moved to
+  `..\esp32-flash-experiment\`; `_archive` copy path is relative (unchanged);
+  scheduled task SKILL.md path updated (task itself is OFF — user disabled it).
+- [x] pi-v0.5.5 also: auto-update toggle (`auto_update` config, default off; UI
+  "Auto" checkbox + `POST /api/update/config`); Wi-Fi signal indicator in topbar;
+  fixes B (install.sh URL), C (httpapi lamp gate), E (wlan0 never-default via NM
+  dispatcher, reboot-persistent).
 - [x] UX-1 (pi-v0.5.1): move 檢查更新 + language INTO the `.topbar` (after versionChip);
   language is a `<select>` dropdown (LANGS array, easy to add locales). Removes
   the bottom-right floating bar.
@@ -148,33 +160,38 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
   24 rows. Verified on Pi: +6h moved an 08-16 band to 14-22.) Root cause of
   "光譜不會移動": upstream Base chart mode never renders the shift, and
   explicit-apply (pi-v0.4.1, user-requested) means it needs a Push.
-- [ ] **FEAT-A: manual hourly value table** — a "逐時數值表" like the user's own
-  `D:\HomeAssistant\K7\K7_QR_Generator\k7profilegeneratoroffline.html`: an
-  editable 24-row × 6-channel number grid (type exact %), plus that tool's
-  "整體位移工具" (rotate curve ±1h per checked channel, power ±1%). The shared
-  UI only has drag-to-edit. Approach: overlay.js injects a collapsible panel
-  under the chart that reads/writes the page's schedule via a small bridge
-  (needs a hook — `scheduleBase` is a `let`, so add a getter/setter through
-  `window` or drive it via `updateChart` + a synthetic drag, OR simplest:
-  the panel POSTs its own grid straight to `/api/push`). Target: pi-v0.6.x or
-  a dedicated pi-v0.10.
-- [ ] **FEAT-B: move working dir** `D:\HomeAssistant\K7\k7-led-controller` →
-  `D:\HomeAssistant\K7\K7_Pi_Wifi_Controller`. Must also update: this file's
-  "Hard rules" path, the scheduled task prompt
-  (`k7-pi-bridge-build-resume/SKILL.md`), `_archive` copy path, any absolute
-  paths in scripts. Do at a clean checkpoint (all committed), not mid-feature.
+  (FEAT-A + FEAT-B are DONE — see the top of this section.)
 
 ---
 
 ## Current state (2026-09-08)
-- **PR #1 MERGED** (Phases 0–2.5). Phase 3 work → PR #2 on `dev/pi-bridge`
-  (also carries the pi-v0.4.1 UX fix until merged).
-- **Pi is running `pi-v0.5.0`** — always-on engine LIVE (tick loop driving the real K7 Pro).
-- REAL wlan0 signal measured: RSSI -73 dBm / 54% / 24 Mbps (Pi far from tank; engine copes, last_write_ok true). User will move the Pi closer later.
-- Releases: pi-v0.1.0 … pi-v0.5.0. Capabilities: **11 / 18**.
-- master branch protected: no force-push, no deletion (no review requirement).
-- pi-v0.4.1: explicit-apply — overlay.js neuters upstream's auto-push; master/
-  shift/mode edits stay local until the user presses ⬆ Push (dirty indicator).
+- **PR #1 + #2 MERGED. PR #3 open** on `dev/pi-bridge` (Phase 3 v0.6–0.9 + v0.5.2–0.5.5).
+- **Pi is running `pi-v0.5.5`** — always-on engine LIVE driving the real K7 Pro.
+  auto_update is OFF (default) — future versions apply only via the UI button.
+- Releases: pi-v0.1.0 … pi-v0.5.5. Capabilities: **11 / 18**.
+- REAL wlan0: RSSI ~-74 dBm / ~52%. wlan0 never-default hardening applied (NM
+  dispatcher, reboot-persistent). Pi far from tank; engine copes. User relocates later.
+- master branch protected: no force-push / no deletion (no review requirement).
+- README.md has a top-of-file fork banner (only diff vs upstream — trivial merges).
+- **D — golden-vector-vs-real-ESP32: DROPPED** (user call). Unit golden tests +
+  careful port are enough; the 7-day soak is the real proof.
+- Working dir renamed to `K7_Pi_Wifi_Controller`; ESP32 flash scripts → `..\esp32-flash-experiment\`.
+
+### NEXT (for a resumed session): pi-v0.6.0 = `smooth_ramp`
+- add `/api/ramp/start|stop|status|tick` to `internal/piapi` (POST start/stop/tick, GET status)
+- ramp state (on/off, last_tick) persisted in a small piapi JSON store under DataDir
+- when ramp ON: `engine.SetInterval(2*time.Minute)` (add that method) so the tick
+  loop pushes interpolated values every ~2 min instead of 60s; when OFF back to 60s.
+  Engine ALREADY interpolates + diffs + push-on-change, so "smooth ramp" ≈ just
+  the faster cadence. Default OFF (flash write-wear — Effects.cpp comment).
+- flip `caps["smooth_ramp"] = true` in main.go
+- `/api/ramp/status` shape (from shared-ui `DEFAULT_STATUS.ramp`): `{active:bool, last_tick:<epoch or iso>}`
+- UI has a consent modal for ramp (`#rampConsentModal`) — it POSTs /api/ramp/start after consent; just need the endpoint to 200
+- deploy pi-v0.6.0, verify `/api/ramp/*` + that output changes more often with it on
+Then v0.7 (feed+maintenance), v0.8 (tracked_lunar — likely just cap flip + maybe
+`/api/lunar/*` passthrough since fixed lunar is already in vendored httpapi and
+engine does moon math), v0.9 (acclimation+seasonal — piapi gets a config store;
+engine.Config already has the fields+math). See Phase 3 checklist notes.
 - Real lamp verified: MAC `4a:55:19:ec:b0:49`, profiles migrated to
   `data/profiles/mac-4a_55_19_ec_b0_49/` (user's `BRS_AB`, `K7_Pro42113`).
 - User confirmed the UI renders + works in a browser.

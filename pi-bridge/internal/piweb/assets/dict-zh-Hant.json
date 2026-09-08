@@ -117,5 +117,12 @@
   "Pushed successfully": "已成功推送",
   "Reading…": "讀取中…",
   "Saving…": "儲存中…",
-  "Manual mode saved": "手動模式已儲存"
+  "Manual mode saved": "手動模式已儲存",
+  "Auto": "自動",
+  "Hourly value table": "逐時數值表",
+  "Load from device": "從裝置載入",
+  "Loaded from device": "已從裝置載入",
+  "Apply to lamp": "套用到燈",
+  "Sent to lamp": "已送出到燈",
+  "Type each hour’s % per channel, then 套用.": "直接輸入每個整點各通道的 %,再按「套用到燈」。"
 }

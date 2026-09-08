@@ -10,6 +10,9 @@
 //   - New() signature takes Options
 //   - added getters: LampName(), LegacyProfiles(), StateSnapshot(), Device(),
 //     SetCapability()
+//   - Options.LampGate: a shared mutex locked around every lamp TCP op so this
+//     server, the always-on engine and the proxy never collide (the lamp takes
+//     one connection at a time)
 // tools/check_httpapi_sync.py reports upstream drift (advisory).
 
 package httpapi
@@ -99,6 +102,7 @@ type Server struct {
 	bridgeName   string
 	platformName string
 	capabilities map[string]bool
+	lampGate     *sync.Mutex
 }
 
 // Options configures a Server. pi-bridge injects its own identity and the full
@@ -118,6 +122,10 @@ type Options struct {
 	// restart.)
 	LampHost string
 	LampPort int
+
+	// LampGate, when set, is locked around every lamp TCP op so this server,
+	// the always-on engine and the proxy never talk to the lamp at once.
+	LampGate *sync.Mutex
 }
 
 // DefaultCapabilities is the "free" set — everything pc-bridge already serves,
@@ -165,6 +173,7 @@ func New(o Options) (*Server, error) {
 		bridgeName:   o.BridgeName,
 		platformName: o.PlatformName,
 		capabilities: o.Capabilities,
+		lampGate:     o.LampGate,
 	}
 	if err := s.loadStore(); err != nil {
 		return nil, err
@@ -219,6 +228,17 @@ func (s *Server) Routes() http.Handler {
 func (s *Server) client() k7tcp.Client {
 	cfg := s.Config()
 	return k7tcp.New(cfg.Host, cfg.Port, s.timeout)
+}
+
+// lampLock serialises this server's lamp I/O with the always-on engine and the
+// raw proxy (the lamp accepts one TCP connection at a time). pi-bridge injects
+// the shared gate via Options.LampGate; without it this is a no-op.
+func (s *Server) lampLock() func() {
+	if s.lampGate == nil {
+		return func() {}
+	}
+	s.lampGate.Lock()
+	return s.lampGate.Unlock
 }
 
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
@@ -433,7 +453,9 @@ func (s *Server) handleLampRead(w http.ResponseWriter, r *http.Request) {
 		methodNotAllowed(w)
 		return
 	}
+	unlock := s.lampLock()
 	state, err := s.client().ReadAll()
+	unlock()
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
@@ -594,8 +616,11 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := s.client().PreviewBrightness(ch); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+	unlock := s.lampLock()
+	lerr := s.client().PreviewBrightness(ch)
+	unlock()
+	if lerr != nil {
+		writeError(w, http.StatusBadGateway, lerr.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -611,8 +636,11 @@ func (s *Server) handleHand(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := s.client().HandLuminance(ch); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+	unlock := s.lampLock()
+	lerr := s.client().HandLuminance(ch)
+	unlock()
+	if lerr != nil {
+		writeError(w, http.StatusBadGateway, lerr.Error())
 		return
 	}
 	if err := s.saveManualState(ch); err != nil {
@@ -664,8 +692,11 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 	schedule = bakePCBridgeEffects(schedule, siesta, lunar)
 	manualForLamp, scheduleForLamp := applyMasterToLampState(manual, schedule, master)
 
-	if err := s.client().PushSchedule(manualForLamp, scheduleForLamp, autoMode); err != nil {
-		writeError(w, http.StatusBadGateway, err.Error())
+	unlock := s.lampLock()
+	lerr := s.client().PushSchedule(manualForLamp, scheduleForLamp, autoMode)
+	unlock()
+	if lerr != nil {
+		writeError(w, http.StatusBadGateway, lerr.Error())
 		return
 	}
 	if err := s.savePushedState(manualForLamp, scheduleForLamp, autoMode, in.ActivePreset, presetDisablesLunar(in.ActivePreset)); err != nil {

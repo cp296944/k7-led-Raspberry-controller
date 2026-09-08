@@ -34,7 +34,8 @@ type Config struct {
 	// OTA.
 	UpdateRepo     string `json:"update_repo"`     // "owner/name"
 	UpdateChannel  string `json:"update_channel"`  // "stable" | "prerelease"
-	UpdateInterval string `json:"update_interval"` // Go duration, e.g. "1h" ("" disables auto)
+	UpdateInterval string `json:"update_interval"` // how often to CHECK, Go duration ("" disables checks)
+	AutoUpdate     bool   `json:"auto_update"`     // if true, apply a found update automatically; else only surface it for the UI button
 
 	// Paths.
 	InstallRoot string `json:"install_root"` // OTA layout root (releases/, current, state/)
@@ -58,6 +59,7 @@ func Defaults() Config {
 		UpdateRepo:     "cp296944/k7-led-Raspberry-controller",
 		UpdateChannel:  "stable",
 		UpdateInterval: "1h",
+		AutoUpdate:     false, // manual by default — the UI's "檢查更新 / 立即更新" button
 		InstallRoot:    "/opt/k7-pi-bridge",
 		DataDir:        "", // filled by normalize() to ${InstallRoot}/data
 		BackupTarget:   "",

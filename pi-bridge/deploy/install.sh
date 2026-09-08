@@ -140,7 +140,10 @@ if [[ $START -eq 1 ]]; then
   systemctl --no-pager --lines=15 status k7-pi-bridge.service || true
   echo
   echo "==> $("$ROOT/current/k7-pi-bridge" --version)"
-  ip -4 -br addr show eth0 | awk '{print "==> LAN UI: http://"$3}' | sed 's#/[0-9]*##'
+  IP="$(ip -4 -br addr show eth0 | awk '{print $3}' | cut -d/ -f1)"
+  [ -n "$IP" ] && echo "==> LAN UI: http://$IP/"
+  HN="$(hostnamectl --static 2>/dev/null || hostname)"
+  [ -n "$HN" ] && echo "==> or:     http://$HN.local/"
 else
   echo "==> installed (not started; --no-start given)"
 fi

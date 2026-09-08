@@ -83,14 +83,22 @@ func run(args []string) error {
 		CurrentTag:  version.Version,
 	})
 	up.ConfirmAfterStart(ctx, version.Version, 45*time.Second, func() bool { return healthy.Load() })
+	cfgPath := os.Getenv("K7_CONFIG")
+	if cfgPath == "" {
+		cfgPath = filepath.Join(cfg.DataDir, "config.json")
+	}
+	var autoUpdate atomic.Bool
+	autoUpdate.Store(cfg.AutoUpdate)
 	if d := parseInterval(cfg.UpdateInterval); d > 0 {
-		go updateLoop(ctx, up, d)
+		go updateLoop(ctx, up, d, &autoUpdate)
 	}
 
 	// Phase 3: the always-on engine drives the lamp; advertise its capabilities.
 	caps := httpapi.DefaultCapabilities()
 	caps["persistent_controller_clock"] = true
 	caps["logs"] = true
+
+	lampConn := lamp.New(cfg.LampHost, cfg.LampPort)
 
 	api, err := httpapi.New(httpapi.Options{
 		ConfigPath:   filepath.Join(cfg.DataDir, "store.json"),
@@ -99,13 +107,13 @@ func run(args []string) error {
 		Device:       "k7pro",
 		LampHost:     cfg.LampHost,
 		LampPort:     cfg.LampPort,
+		LampGate:     lampConn.Gate(),
 		Capabilities: caps,
 	})
 	if err != nil {
 		return fmt.Errorf("http api: %w", err)
 	}
 
-	lampConn := lamp.New(cfg.LampHost, cfg.LampPort)
 	eng := engine.New(piapi.NewProvider(api), lampConn, tz, 60*time.Second)
 	go eng.Run(ctx)
 
@@ -131,7 +139,7 @@ func run(args []string) error {
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           routes(cfg, up, uiHandler),
+		Handler:           routes(cfg, cfgPath, up, &autoUpdate, uiHandler),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -168,7 +176,7 @@ func run(args []string) error {
 	return srv.Shutdown(shutCtx)
 }
 
-func routes(cfg config.Config, up *updater.Updater, ui http.Handler) http.Handler {
+func routes(cfg config.Config, cfgPath string, up *updater.Updater, autoUpdate *atomic.Bool, ui http.Handler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -178,7 +186,10 @@ func routes(cfg config.Config, up *updater.Updater, ui http.Handler) http.Handle
 
 	mux.HandleFunc("GET /api/update/status", func(w http.ResponseWriter, r *http.Request) {
 		rel, err := up.Check(r.Context())
-		resp := map[string]any{"current": version.Version, "channel": cfg.UpdateChannel, "repo": cfg.UpdateRepo}
+		resp := map[string]any{
+			"current": version.Version, "channel": cfg.UpdateChannel, "repo": cfg.UpdateRepo,
+			"auto_update": autoUpdate.Load(),
+		}
 		if err != nil {
 			resp["error"] = err.Error()
 			writeJSON(w, http.StatusBadGateway, resp)
@@ -192,6 +203,24 @@ func routes(cfg config.Config, up *updater.Updater, ui http.Handler) http.Handle
 			resp["notes"] = rel.Notes
 		}
 		writeJSON(w, http.StatusOK, resp)
+	})
+
+	// Toggle automatic OTA. Persists to config.json so it survives restarts.
+	mux.HandleFunc("POST /api/update/config", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			AutoUpdate *bool `json:"auto_update"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.AutoUpdate == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "auto_update (bool) required"})
+			return
+		}
+		autoUpdate.Store(*in.AutoUpdate)
+		c := cfg
+		c.AutoUpdate = *in.AutoUpdate
+		if err := c.Save(cfgPath); err != nil {
+			slog.Warn("save config", "err", err)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"auto_update": *in.AutoUpdate})
 	})
 
 	mux.HandleFunc("POST /api/update/apply", func(w http.ResponseWriter, r *http.Request) {
@@ -225,7 +254,7 @@ func routes(cfg config.Config, up *updater.Updater, ui http.Handler) http.Handle
 	return logRequests(mux)
 }
 
-func updateLoop(ctx context.Context, up *updater.Updater, every time.Duration) {
+func updateLoop(ctx context.Context, up *updater.Updater, every time.Duration, auto *atomic.Bool) {
 	// small initial delay so a broken release doesn't insta-loop on boot
 	timer := time.NewTimer(2 * time.Minute)
 	defer timer.Stop()
@@ -238,9 +267,13 @@ func updateLoop(ctx context.Context, up *updater.Updater, every time.Duration) {
 		if rel, err := up.Check(ctx); err != nil {
 			slog.Warn("update check failed", "err", err)
 		} else if rel != nil {
-			slog.Info("update available, applying", "tag", rel.Tag)
-			if err := up.Apply(ctx, rel); err != nil {
-				slog.Error("update apply failed", "err", err)
+			if auto.Load() {
+				slog.Info("update available, auto-applying", "tag", rel.Tag)
+				if err := up.Apply(ctx, rel); err != nil {
+					slog.Error("update apply failed", "err", err)
+				}
+			} else {
+				slog.Info("update available (auto_update off — apply from the UI)", "tag", rel.Tag)
 			}
 		}
 		timer.Reset(every)
