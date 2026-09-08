@@ -173,7 +173,9 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 ## Current state (2026-09-08 — end of session)
 - **All merged to master through PR #7** (pi-v0.9.5 + PROGRESS). origin/master ==
   origin/dev/pi-bridge == 079ef0b was the baseline for this session.
-- **pi-v0.9.6 in progress on `dev/pi-bridge`** — three user-reported fixes:
+- **pi-v0.9.6 merged (PR #8, origin/master == origin/dev/pi-bridge == 9d93517).**
+  Release `pi-v0.9.6` published by CI. User applies the OTA from the UI himself.
+  Three user-reported fixes:
   1. **Read buttons were no-ops on the Pi.** Root cause: upstream
      `readControllerState()` only does a live `/api/lamp/read` when platform is
      `pc_bridge`; on `pi_bridge` it just reloads the local `/api/state` cache.
@@ -209,14 +211,17 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 - Working dir: `D:\HomeAssistant\K7\K7_Pi_Wifi_Controller`; ESP32 flash scripts
   in `..\esp32-flash-experiment\`. Scheduled resume task: OFF (user disabled).
 
-### NEXT (this session): finish pi-v0.9.6
-- build/vet/test/arm64 all green ✅ (done)
-- commit + push `dev/pi-bridge`, tag `pi-v0.9.6`, wait CI
-- deploy to Pi **scratch port :19999** (K7_DATA_DIR=/tmp/xxx --proxy ""), do NOT
-  OTA the running :80 service — show the user, he applies the update himself
-- verify: both Read buttons trigger a lamp readAll; 光譜數值表 appears under the
-  chart in Auto mode and is live-linked
-- gh pr create → CI green → merge → sync dev
+### pi-v0.9.6 — DONE
+- build/vet/test/arm64/k7tcp-sync all green ✅
+- committed, pushed, tagged `pi-v0.9.6`, CI green, PR #8 merged, dev synced ✅
+- verified locally against `tools/mock_k7pro_lamp.py` in the in-app browser:
+  both Read buttons issue `GET /api/lamp/read` (200); 光譜數值表 mounts under the
+  chart in Auto mode, expands, and live-links to the chart datasets when a
+  preset is loaded.
+- NOT deployed to the Pi scratch port — the JS fixes are fully browser-side and
+  the real lamp currently has an all-zero schedule anyway, so a scratch-port
+  engine would only risk dual lamp control for no extra signal. User applies the
+  OTA + repopulates the schedule from the UI (his stated workflow).
 
 ### Open feature request (queued, not started)
 - **引擎託管 / 燈自主 切換**: a UI switch for "Pi drives the lamp live (0x1005)"
