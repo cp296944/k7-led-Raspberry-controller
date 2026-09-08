@@ -104,12 +104,158 @@
       location.reload();
     };
 
+    // settings (setup_portal)
+    var gear = el('button', { type: 'button', textContent: '⚙', title: dict['Settings'] || '設定' });
+    styleBtn(gear);
+    gear.onclick = openSettings;
+
     wrap.appendChild(updBtn);
     wrap.appendChild(autoLbl);
     wrap.appendChild(status);
     wrap.appendChild(sel);
+    wrap.appendChild(gear);
     anchor.parentNode.insertBefore(wrap, anchor.nextSibling);
     return true;
+  }
+
+  // ---- settings modal (setup_portal) ---------------------------------------
+  function modalShell(id, title) {
+    var back = el('div', { id: id });
+    back.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.55);display:flex;align-items:flex-start;justify-content:center;padding:5vh 12px';
+    back.onclick = function (e) { if (e.target === back) back.remove(); };
+    var panel = el('div');
+    panel.style.cssText = 'background:var(--surface,#1c2229);color:var(--text,#e7ecf1);border:1px solid var(--border,#2c343d);border-radius:10px;max-width:520px;width:100%;max-height:86vh;overflow:auto;box-shadow:0 12px 40px rgba(0,0,0,.5)';
+    var head = el('div'); head.style.cssText = 'position:sticky;top:0;background:inherit;display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border,#2c343d);font-weight:600';
+    head.appendChild(document.createTextNode(title));
+    var x = el('button', { type: 'button', textContent: '✕' }); styleBtn(x); x.onclick = function () { back.remove(); };
+    head.appendChild(x);
+    var body = el('div'); body.style.cssText = 'padding:14px 16px 18px';
+    panel.appendChild(head); panel.appendChild(body); back.appendChild(panel);
+    return { back: back, body: body };
+  }
+
+  function openSettings() {
+    if (document.getElementById('k7pi-settings')) return;
+    var m = modalShell('k7pi-settings', dict['Settings'] || '設定');
+    var body = m.body;
+    document.body.appendChild(m.back);
+    body.textContent = '…';
+
+    var L = function (s) { return dict[s] || s; };
+    var section = function (t) {
+      var h = el('div', { textContent: t });
+      h.style.cssText = 'font-weight:600;font-size:0.85rem;margin:14px 0 6px;color:var(--text,#e7ecf1)';
+      body.appendChild(h);
+      return h;
+    };
+    var field = function (label, node) {
+      var row = el('div'); row.style.cssText = 'display:flex;align-items:center;gap:8px;margin:5px 0;font-size:0.85rem';
+      var lab = el('label', { textContent: label }); lab.style.cssText = 'flex:0 0 120px;color:var(--muted,#93a1af)';
+      row.appendChild(lab); row.appendChild(node); body.appendChild(row);
+      return node;
+    };
+    var inp = function (val, w) {
+      var i = el('input', { value: val == null ? '' : String(val) });
+      i.style.cssText = 'flex:1;min-width:0;background:var(--surface2,#262e37);border:1px solid var(--border,#2c343d);color:var(--text,#e7ecf1);border-radius:5px;padding:4px 7px;font:inherit';
+      if (w) i.style.flex = '0 0 ' + w;
+      return i;
+    };
+    var note = function (t) {
+      var n = el('div', { textContent: t });
+      n.style.cssText = 'font-size:0.78rem;color:var(--muted,#93a1af);margin:4px 0 0';
+      body.appendChild(n);
+      return n;
+    };
+    var msg = el('div'); msg.style.cssText = 'font-size:0.82rem;margin:10px 0 0;min-height:1.2em';
+
+    fetch('/api/setup').then(function (r) { return r.json(); }).then(function (d) {
+      body.textContent = '';
+
+      section(L('Lamp'));
+      var devSel = el('select');
+      devSel.style.cssText = 'flex:1;background:var(--surface2,#262e37);border:1px solid var(--border,#2c343d);color:var(--text,#e7ecf1);border-radius:5px;padding:4px 7px;font:inherit';
+      [['k7pro', 'K7 Pro'], ['k7mini', 'K7 Mini']].forEach(function (o) {
+        var op = el('option', { value: o[0], textContent: o[1] });
+        if (o[0] === d.lamp.device) op.selected = true;
+        devSel.appendChild(op);
+      });
+      field(L('Device'), devSel);
+      var host = field('IP', inp(d.lamp.host));
+      var port = field(L('Port') || 'Port', inp(d.lamp.port, '90px'));
+
+      section(L('Location') + ' (' + (dict['timezone drives the scheduler; lat/lon reserved'] || '時區用於排程,經緯度保留給日出日落') + ')');
+      var tz = field(L('Timezone') || 'Timezone', inp(d.location.timezone));
+      var lat = field(L('Latitude') || 'Latitude', inp(d.location.latitude, '110px'));
+      var lon = field(L('Longitude') || 'Longitude', inp(d.location.longitude, '110px'));
+
+      section(L('Updates') || 'Updates');
+      var chSel = el('select');
+      chSel.style.cssText = devSel.style.cssText;
+      ['stable', 'prerelease'].forEach(function (c) {
+        var op = el('option', { value: c, textContent: c });
+        if (c === d.update.channel) op.selected = true;
+        chSel.appendChild(op);
+      });
+      field(L('Channel') || 'Channel', chSel);
+      note(L('Current') + ': ' + d.update.current + '  ·  ' + d.update.repo);
+
+      var saveBtn = el('button', { type: 'button', textContent: L('Save') });
+      styleBtn(saveBtn); saveBtn.style.marginTop = '12px'; saveBtn.style.borderColor = '#4a7';
+      saveBtn.onclick = function () {
+        saveBtn.disabled = true; msg.textContent = '…'; msg.style.color = 'var(--muted,#93a1af)';
+        var lampBody = { host: host.value.trim(), port: parseInt(port.value, 10) || d.lamp.port, device: devSel.value };
+        var setupBody = {
+          location: { timezone: tz.value.trim(), latitude: parseFloat(lat.value), longitude: parseFloat(lon.value) },
+          update: { channel: chSel.value }
+        };
+        Promise.all([
+          fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(lampBody) }).then(function (r) { return r.json(); }),
+          fetch('/api/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(setupBody) }).then(function (r) { return r.json(); })
+        ]).then(function (res) {
+          saveBtn.disabled = false;
+          var err = (res[0] && res[0].error) || (res[1] && res[1].error);
+          if (err) { msg.textContent = '✗ ' + err; msg.style.color = '#e05a5a'; return; }
+          var rr = (res[1] && res[1].restart_required) || [];
+          if (rr.length) {
+            msg.style.color = '#e0a53a';
+            msg.textContent = (L('Saved — restart to apply:') || '已儲存,需重啟服務才會套用:') + ' ' + rr.join(', ');
+          } else {
+            msg.style.color = '#4caf50';
+            msg.textContent = L('Saved') + ' ✓';
+          }
+        }).catch(function (e) { saveBtn.disabled = false; msg.textContent = '✗ ' + e; msg.style.color = '#e05a5a'; });
+      };
+      body.appendChild(saveBtn);
+      body.appendChild(msg);
+
+      // danger zone
+      section('⚠ ' + (L('Danger zone') || '危險操作'));
+      var dz = el('div'); dz.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap';
+      var restartBtn = el('button', { type: 'button', textContent: L('Restart service') || '重啟服務' });
+      styleBtn(restartBtn); restartBtn.style.borderColor = '#e0a53a';
+      restartBtn.onclick = function () {
+        if (!window.confirm(L('Restart the k7-pi-bridge service now?') || '現在重啟 k7-pi-bridge 服務?')) return;
+        fetch('/api/setup/restart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: true }) });
+        msg.style.color = '#e0a53a'; msg.textContent = L('Restarting…') || '重新啟動中…';
+        setTimeout(function () { location.reload(); }, 6000);
+      };
+      var frBtn = el('button', { type: 'button', textContent: L('Factory reset') || '恢復原廠' });
+      styleBtn(frBtn); frBtn.style.borderColor = '#e05a5a';
+      frBtn.onclick = function () {
+        if (!window.confirm(L('Wipe the schedule store, effect configs and saved profiles? Network settings are kept. The service restarts.') ||
+              '清除排程、燈效設定與已存的設定檔?網路設定會保留,服務會重啟。')) return;
+        fetch('/api/setup/factory-reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: true }) });
+        msg.style.color = '#e05a5a'; msg.textContent = L('Resetting…') || '清除中…';
+        setTimeout(function () { location.reload(); }, 6000);
+      };
+      dz.appendChild(restartBtn); dz.appendChild(frBtn);
+      body.appendChild(dz);
+
+      // read-only info
+      section(L('System') || 'System');
+      note((d.wifi && d.wifi.OK ? (L('lamp link OK') || '燈連線正常') : (L('lamp: no recent contact') || '燈:最近無連線')));
+      note(L('Data dir') + ': ' + (d.system && d.system.data_dir || '?'));
+    }).catch(function (e) { body.textContent = '✗ ' + e; });
   }
   function autoLbl_style(l) {
     l.style.cssText = 'display:inline-flex;gap:3px;align-items:center;font-size:0.76rem;color:var(--muted,#8a95a3);cursor:pointer';

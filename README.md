@@ -130,6 +130,11 @@ scripts are **byte-for-byte upstream**. `git diff upstream/master -- pc-bridge s
   (clock not set, lamp unreachable, weak Wi-Fi to the lamp, an all-zero schedule
   that would leave the tank dark, a failed write). Upstream `pc-bridge` never
   implemented the endpoint, so the panel was always empty.
+- **Settings page (`setup_portal`)** — a ⚙ modal in the top bar for lamp
+  model / IP / port, timezone + lat/lon, update channel, plus **Restart
+  service** and **Factory reset** (both confirmed). The ESP32's Wi-Fi
+  onboarding portal has no shared-UI panel; this is pi-bridge's equivalent.
+  With it, **all 18 capability flags are `true` — full 1:1 with the ESP32.**
 - **Today's lamp-write counter** in the top bar — `auto` (engine) vs `manual`
   (your Push / Preview), reset at local midnight, so you can see how much the
   Pi is talking to the lamp.

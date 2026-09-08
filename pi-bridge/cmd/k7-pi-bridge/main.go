@@ -95,12 +95,12 @@ func run(args []string) error {
 		go updateLoop(ctx, up, d, &autoUpdate)
 	}
 
-	// Phase 3: the always-on engine drives the lamp; every feature is live.
+	// The always-on engine drives the lamp and every ESP32 feature is live,
+	// including the setup portal (pi-bridge's own settings page — see setup.go).
 	caps := httpapi.DefaultCapabilities()
 	for k := range caps {
 		caps[k] = true
 	}
-	caps["setup_portal"] = false // Phase 4
 
 	lampConn := lamp.New(cfg.LampHost, cfg.LampPort)
 	fx := piapi.NewEffectsStore(cfg.DataDir)
@@ -150,9 +150,14 @@ func run(args []string) error {
 		UpdateRepo: cfg.UpdateRepo,
 	})
 
+	setup := &setupAPI{
+		cfg: cfg, cfgPath: cfgPath, dataDir: cfg.DataDir,
+		autoUpdate: &autoUpdate, api: api, lamp: lampConn, started: time.Now(),
+	}
+
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           routes(cfg, cfgPath, up, &autoUpdate, uiHandler),
+		Handler:           routes(cfg, cfgPath, up, &autoUpdate, setup, uiHandler),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -189,13 +194,17 @@ func run(args []string) error {
 	return srv.Shutdown(shutCtx)
 }
 
-func routes(cfg config.Config, cfgPath string, up *updater.Updater, autoUpdate *atomic.Bool, ui http.Handler) http.Handler {
+func routes(cfg config.Config, cfgPath string, up *updater.Updater, autoUpdate *atomic.Bool, setup *setupAPI, ui http.Handler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		fmt.Fprintln(w, "ok")
 	})
+
+	if setup != nil {
+		setup.register(mux)
+	}
 
 	mux.HandleFunc("GET /api/update/status", func(w http.ResponseWriter, r *http.Request) {
 		rel, err := up.Check(r.Context())
