@@ -170,7 +170,38 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 
 ---
 
-## Current state (2026-09-08 — pi-v0.9.8 in progress)
+## Current state (2026-09-08 — pi-v0.9.9 in progress)
+
+### pi-v0.9.9 — Shift now moves the Base schedule for real
+User: "BASE 的 SHIFT 是壞的,每次按 SHIFT 他就自動跳到 Effective Today".
+- The `◀ ▶` Shift buttons now call a real `rotateScheduleHours(delta)` in
+  overlay.js: reads all 6 channel columns off the chart, writes them back
+  rotated `new[h]=old[h-delta]` through the page's own `dragData.onDrag` (so
+  `scheduleBase` — what Push sends — actually moves). Chart **stays on Base**;
+  the old wrap's forced `setChartMode('effective')` is gone.
+- `#shiftVal` is now a running readout (`data-k7pi` attr holds the net hours);
+  resets to `+0h` after Push. `dayShift` (the upstream `let`) is never touched →
+  `signedShiftMinutes()` stays 0 → piweb does NOT rotate again server-side → no
+  double-shift. The 0.9.7 post-push `readFromDevice()` for shift is removed
+  (moot now, and it risked clobbering on a flaky lamp read).
+- Removed the `chartEffectiveValueAtMins` wrap (it compensated for the old
+  parameter model; with a real rotation Effective Today already reflects it via
+  the rotated `scheduleBase`).
+- Value-table `⟲ -1h / ⟳ +1h / ±1%` buttons **kept** (user asked) — same
+  mechanism, but per-checked-channel for fine manual nudging.
+- Verified vs mock in browser: Shift +3h → chart stays on Base, all 6 channels
+  rotate `new[h]==old[h-3]`, label `+3h`; Push → server stores the rotated rows
+  once (`schedule_shift_minutes:0`), label back to `+0h`. No console errors.
+- Note for the user: Windows Firewall prompts for `k7-pi-bridge.exe` are from
+  local `go run` test instances (localhost only — safe to Deny); not the Pi.
+
+## Current state (2026-09-08 — pi-v0.9.8 merged)
+
+**PR #10 merged. origin/master == origin/dev/pi-bridge == c9a9bd5. Release
+`pi-v0.9.8` published (arm64 binary + SHA256SUMS). User applies the OTA from the
+UI — now with a confirmation dialog.**
+
+### pi-v0.9.8 — 3 user reports + a value-table crash fix
 
 ### pi-v0.9.8 — 3 user reports + a value-table crash fix
 1. **"it auto-updated again without me ticking Auto"** — investigated on the Pi:

@@ -115,10 +115,12 @@ scripts are **byte-for-byte upstream**. `git diff upstream/master -- pc-bridge s
   — upstream only does that for `pc-bridge`.
 - **Push is explicit** — the master slider and Day-shift stage changes locally and
   only reach the lamp on **⬆ Push** (upstream auto-pushes each change).
-- **Day-shift actually moves the schedule.** `schedule_shift_minutes` rotates the
-  24 rows on Push (upstream `pc-bridge` accepts the field and ignores it), and
-  after the Push the chart re-reads so the Base view shows the rotated schedule
-  and the counter resets — no accidental double-shift.
+- **Day-shift actually moves the Base schedule.** The `◀ ▶` Shift buttons
+  rotate the real 24 rows on the Base chart, in place — the curve visibly moves,
+  the chart stays on Base (upstream only bumps a counter the Base view never
+  renders). The `+Nh` readout is a running total that resets to `+0h` after
+  Push. Nothing is sent to the server as a separate shift parameter, so there is
+  no double-shift.
 - **Spectrum value table** sits open under the chart (not collapsed) so the
   drag chart and the exact %-per-hour grid are visible together, columns
   aligned with the header.
