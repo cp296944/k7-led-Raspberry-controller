@@ -170,7 +170,13 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 
 ---
 
-## Current state (2026-09-08 — pi-v0.9.8 in progress)
+## Current state (2026-09-08 — pi-v0.9.8 merged)
+
+**PR #10 merged. origin/master == origin/dev/pi-bridge == c9a9bd5. Release
+`pi-v0.9.8` published (arm64 binary + SHA256SUMS). User applies the OTA from the
+UI — now with a confirmation dialog.**
+
+### pi-v0.9.8 — 3 user reports + a value-table crash fix
 
 ### pi-v0.9.8 — 3 user reports + a value-table crash fix
 1. **"it auto-updated again without me ticking Auto"** — investigated on the Pi:
