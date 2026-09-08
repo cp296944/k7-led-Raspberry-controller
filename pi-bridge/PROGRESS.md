@@ -177,7 +177,25 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
   careful port are enough; the 7-day soak is the real proof.
 - Working dir renamed to `K7_Pi_Wifi_Controller`; ESP32 flash scripts → `..\esp32-flash-experiment\`.
 
-### NEXT (for a resumed session): pi-v0.6.0 = `smooth_ramp`
+### Phase 3 — v0.6-0.9 ✅ DONE (tag `pi-v0.9.0`) → **17/18**
+- `internal/piapi/effects.go` — EffectsStore (data/effects.json) + all endpoints:
+  - `smooth_ramp`: /api/ramp/{start,stop,status,tick}. Engine gets SetInterval();
+    ramp ON → 60s tick, OFF → 5min. Engine already interpolates+diffs+push-on-change.
+  - `feed_mode` + `maintenance_mode`: /api/{feed,maintenance}/{start,stop,status}.
+    engine.Override (timed full-output replacement). Channel tables from Effects.cpp
+    (feedPro {80,10,40,5,10,0} ch[3]=intensity; maintenancePro {100,30,55,15,40,5}×intensity).
+  - `acclimation` + `seasonal_daylength`: /api/{acclimation,seasonal}/{config,status}.
+    engine.Config already had the fields+math; Provider now merges them from EffectsStore.
+- main.go: ALL caps true except setup_portal. Engine default interval 5min (ramp off).
+- vendored k7tcp: 1 documented patch (net.JoinHostPort — silences Go 1.27 vet);
+  check_k7tcp_sync.py applies the same transform to upstream before diffing.
+- engine tests: SetInterval clamp, Override active/expired/nil, step-applies-override.
+- verified vs mock: 17 caps, ramp cadence flips, feed/maint override the output with
+  the right channels + countdown, acclimation current_percent, seasonal shift.
+
+### NEXT: Phase 4 = pi-v1.0 (setup_portal → 18/18) then soak; Phase 5 = HA.
+OLD NOTES (kept):
+### (was) NEXT: pi-v0.6.0 = `smooth_ramp`
 - add `/api/ramp/start|stop|status|tick` to `internal/piapi` (POST start/stop/tick, GET status)
 - ramp state (on/off, last_tick) persisted in a small piapi JSON store under DataDir
 - when ramp ON: `engine.SetInterval(2*time.Minute)` (add that method) so the tick

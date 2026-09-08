@@ -43,18 +43,20 @@ type OutputStatus struct {
 }
 
 type Engine struct {
-	prov     Provider
-	lamp     *lamp.Lamp
-	tz       *time.Location
-	interval time.Duration
+	prov Provider
+	lamp *lamp.Lamp
+	tz   *time.Location
 
 	mu       sync.Mutex
 	status   OutputStatus
 	lastSent [Channels]int
 	haveSent bool
 	override *Override
+	interval time.Duration // live-tunable (smooth ramp)
+	lastPush time.Time
 
-	tickNow chan struct{}
+	tickNow  chan struct{}
+	reticker chan struct{}
 }
 
 func New(prov Provider, l *lamp.Lamp, tz *time.Location, interval time.Duration) *Engine {
@@ -64,7 +66,11 @@ func New(prov Provider, l *lamp.Lamp, tz *time.Location, interval time.Duration)
 	if interval <= 0 {
 		interval = 60 * time.Second
 	}
-	return &Engine{prov: prov, lamp: l, tz: tz, interval: interval, tickNow: make(chan struct{}, 1)}
+	return &Engine{
+		prov: prov, lamp: l, tz: tz, interval: interval,
+		tickNow:  make(chan struct{}, 1),
+		reticker: make(chan struct{}, 1),
+	}
 }
 
 // Kick forces an immediate recompute+push (call after a user push / mode change).
@@ -73,6 +79,38 @@ func (e *Engine) Kick() {
 	case e.tickNow <- struct{}{}:
 	default:
 	}
+}
+
+// SetInterval retunes the tick cadence at runtime (smooth ramp on/off).
+func (e *Engine) SetInterval(d time.Duration) {
+	if d < 15*time.Second {
+		d = 15 * time.Second
+	}
+	e.mu.Lock()
+	changed := e.interval != d
+	e.interval = d
+	e.mu.Unlock()
+	if changed {
+		slog.Info("engine interval changed", "interval", d)
+		select {
+		case e.reticker <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// Interval returns the current tick cadence.
+func (e *Engine) Interval() time.Duration {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.interval
+}
+
+// LastPush is when the engine last successfully wrote to the lamp.
+func (e *Engine) LastPush() time.Time {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.lastPush
 }
 
 // SetOverride installs or clears a timed full-output override.
@@ -107,7 +145,7 @@ func (e *Engine) Run(ctx context.Context) {
 	_ = e.lamp.SyncTime()
 	e.step()
 
-	t := time.NewTicker(e.interval)
+	t := time.NewTicker(e.Interval())
 	defer t.Stop()
 	daily := time.NewTicker(6 * time.Hour)
 	defer daily.Stop()
@@ -119,6 +157,8 @@ func (e *Engine) Run(ctx context.Context) {
 			e.step()
 		case <-e.tickNow:
 			e.step()
+		case <-e.reticker:
+			t.Reset(e.Interval())
 		case <-daily.C:
 			_ = e.lamp.SyncTime()
 		}
@@ -162,6 +202,7 @@ func (e *Engine) step() {
 		e.status.SentMs = time.Now().UnixMilli()
 		e.lastSent = out.Channels
 		e.haveSent = true
+		e.lastPush = time.Now()
 	}
 	e.mu.Unlock()
 	if err != nil {

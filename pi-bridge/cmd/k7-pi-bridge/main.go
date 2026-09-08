@@ -93,12 +93,15 @@ func run(args []string) error {
 		go updateLoop(ctx, up, d, &autoUpdate)
 	}
 
-	// Phase 3: the always-on engine drives the lamp; advertise its capabilities.
+	// Phase 3: the always-on engine drives the lamp; every feature is live.
 	caps := httpapi.DefaultCapabilities()
-	caps["persistent_controller_clock"] = true
-	caps["logs"] = true
+	for k := range caps {
+		caps[k] = true
+	}
+	caps["setup_portal"] = false // Phase 4
 
 	lampConn := lamp.New(cfg.LampHost, cfg.LampPort)
+	fx := piapi.NewEffectsStore(cfg.DataDir)
 
 	api, err := httpapi.New(httpapi.Options{
 		ConfigPath:   filepath.Join(cfg.DataDir, "store.json"),
@@ -114,7 +117,7 @@ func run(args []string) error {
 		return fmt.Errorf("http api: %w", err)
 	}
 
-	eng := engine.New(piapi.NewProvider(api), lampConn, tz, 60*time.Second)
+	eng := engine.New(piapi.NewProvider(api, fx, tz), lampConn, tz, 5*time.Minute)
 	go eng.Run(ctx)
 
 	// Per-lamp profile store (isolated from OTA; keyed by lamp MAC/name).
@@ -125,12 +128,14 @@ func run(args []string) error {
 	// pi-bridge UX layer over the unmodified upstream UI.
 	uiHandler := piweb.Wrap(piweb.Deps{
 		Next: piapi.Wrap(piapi.Deps{
-			Next:   api.Routes(),
-			API:    api,
-			Engine: eng,
-			Lamp:   lampConn,
-			Log:    rlog,
-			TZ:     tz,
+			Next:    api.Routes(),
+			API:     api,
+			Engine:  eng,
+			Lamp:    lampConn,
+			Log:     rlog,
+			TZ:      tz,
+			DataDir: cfg.DataDir,
+			FX:      fx,
 		}),
 		Profiles:   profStore,
 		Version:    version.Version,
