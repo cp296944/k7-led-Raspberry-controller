@@ -329,11 +329,15 @@
         }).then(function (r) { return r.json().catch(function () { return {}; }); })
           .then(function (res) {
             if (res && res.error) { go.disabled = false; status.textContent = '✗ ' + res.error; return; }
+            // the server may install something newer than we listed — poll for
+            // whatever it says it's actually applying
+            var target = (res && res.applying) || d.available;
+            if (target !== d.available) status.textContent = (dict['Restarting…'] || 'Updating…') + ' → ' + target;
             var tries = 0;
             var iv = setInterval(function () {
               tries++;
               fetch('/api/version').then(function (r) { return r.json(); }).then(function (v) {
-                if (v.version === d.available) { clearInterval(iv); location.reload(); }
+                if (v.version === target) { clearInterval(iv); location.reload(); }
               }).catch(function () {});
               if (tries > 40) clearInterval(iv);
             }, 2000);

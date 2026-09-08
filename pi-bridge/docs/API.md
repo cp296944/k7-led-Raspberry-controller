@@ -66,6 +66,13 @@ Legend: **F** free (pc-bridge already implements) · **P2/P3/P4** pi-bridge phas
 | `/api/wifi/signal` | GET | P3 | link RSSI/quality |
 | `/api/warnings/status` | GET | P3/P4 | live warnings feed (clock, lamp link, Wi-Fi, dark schedule, failed write) — done pi-v0.9.10 |
 | `/api/logs` | GET | P3 | ring-buffer log (`logs` capability) |
+| `/api/diag` | GET | P4 | soak-test snapshot (RSS, heap, goroutines, GC, lamp-op health, today's writes) + tail of `data/soak.log` (hourly). `?lines=N`. pi-v1.0.1 |
+
+`/api/output/status` `writes_today:{auto,manual,date}` is now backed by
+`data/writes.json` — it survives a restart / OTA within the same local day
+(pi-v1.0.1). `/api/update/apply` needs `{confirm:true}`; `tag` is an advisory
+hint — if a newer release landed since, that newer one is installed and the
+response's `applying` names it.
 
 ## Setup (`setup_portal`) — done pi-v1.0.0
 

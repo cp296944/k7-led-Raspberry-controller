@@ -26,6 +26,9 @@ type Lamp struct {
 		failAt time.Time
 		err    string
 	}
+	ops        int // total lamp ops attempted
+	fails      int // total that errored
+	consecFail int // current consecutive-failure streak (0 when healthy)
 }
 
 func New(host string, port int) *Lamp {
@@ -64,15 +67,32 @@ func (l *Lamp) Health() Health {
 func (l *Lamp) do(name string, timeout time.Duration, fn func(k7tcp.Client) error) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.ops++
 	err := fn(l.client(timeout))
 	if err != nil {
 		l.last.failAt = time.Now()
 		l.last.err = err.Error()
-		slog.Warn("lamp op failed", "op", name, "err", err)
+		l.fails++
+		l.consecFail++
+		slog.Warn("lamp op failed", "op", name, "err", err, "consec", l.consecFail)
 	} else {
 		l.last.okAt = time.Now()
+		l.consecFail = 0
 	}
 	return err
+}
+
+// Stats reports cumulative lamp-op health for the soak log / diagnostics.
+type Stats struct {
+	Ops        int `json:"ops"`
+	Fails      int `json:"fails"`
+	ConsecFail int `json:"consec_fail"`
+}
+
+func (l *Lamp) Stats() Stats {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return Stats{Ops: l.ops, Fails: l.fails, ConsecFail: l.consecFail}
 }
 
 // Hand pushes live per-channel luminance (0..255) with an ack wait (0x1005).

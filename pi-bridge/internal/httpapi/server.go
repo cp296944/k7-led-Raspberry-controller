@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/k7tcp"
+	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/tally"
 )
 
 //go:embed static/*.html static/vendor/* diagnostic/*.html presets.json
@@ -103,10 +104,7 @@ type Server struct {
 	platformName string
 	capabilities map[string]bool
 	lampGate     *sync.Mutex
-
-	writesMu     sync.Mutex
-	writesDay    string // local date the manualWrites count belongs to
-	manualWrites int    // user-initiated lamp writes today (push / hand / preview)
+	tally        *tally.Counter // shared restart-surviving lamp-write counter (manual side)
 }
 
 // Options configures a Server. pi-bridge injects its own identity and the full
@@ -130,6 +128,10 @@ type Options struct {
 	// LampGate, when set, is locked around every lamp TCP op so this server,
 	// the always-on engine and the proxy never talk to the lamp at once.
 	LampGate *sync.Mutex
+
+	// Tally, when set, receives one AddManual() per user-initiated lamp write
+	// (push / hand / preview / re-arm) — shared with the engine, survives OTA.
+	Tally *tally.Counter
 }
 
 // DefaultCapabilities is the "free" set — everything pc-bridge already serves,
@@ -178,6 +180,7 @@ func New(o Options) (*Server, error) {
 		platformName: o.PlatformName,
 		capabilities: o.Capabilities,
 		lampGate:     o.LampGate,
+		tally:        o.Tally,
 	}
 	if err := s.loadStore(); err != nil {
 		return nil, err
@@ -235,23 +238,11 @@ func (s *Server) client() k7tcp.Client {
 }
 
 // countManualWrite tallies a user-initiated lamp write (push / hand / preview /
-// re-arm) into today's counter, resetting at local midnight.
+// re-arm) into the shared restart-surviving counter.
 func (s *Server) countManualWrite() {
-	s.writesMu.Lock()
-	defer s.writesMu.Unlock()
-	day := time.Now().Format("2006-01-02")
-	if day != s.writesDay {
-		s.writesDay, s.manualWrites = day, 0
+	if s.tally != nil {
+		s.tally.AddManual()
 	}
-	s.manualWrites++
-}
-
-// ManualWritesToday returns today's user-initiated lamp-write count and the
-// local date it belongs to.
-func (s *Server) ManualWritesToday() (int, string) {
-	s.writesMu.Lock()
-	defer s.writesMu.Unlock()
-	return s.manualWrites, s.writesDay
 }
 
 // Republish re-sends the last-pushed schedule + manual state to the lamp

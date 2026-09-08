@@ -2,11 +2,13 @@ package engine
 
 import (
 	"errors"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/k7tcp"
+	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/tally"
 )
 
 type fakeProv struct{ s Snapshot }
@@ -100,7 +102,9 @@ func TestStepAppliesOverride(t *testing.T) {
 
 func TestStepDormantWhenNotLive(t *testing.T) {
 	lp := &fakeLamp{}
+	tal := tally.Load(filepath.Join(t.TempDir(), "w.json"), time.UTC)
 	e := New(fakeProv{s: constSnap(40)}, lp, time.UTC, time.Minute)
+	e.SetTally(tal)
 	e.step() // not live, no override
 	st := e.Status()
 	want := [Channels]int{40, 40, 40, 40, 40, 40}
@@ -113,21 +117,23 @@ func TestStepDormantWhenNotLive(t *testing.T) {
 	if st.Sent != want {
 		t.Errorf("dormant status should mirror Sent=Target (lamp runs its own schedule), got Sent=%v", st.Sent)
 	}
-	if n, _ := e.WritesToday(); n != 0 {
-		t.Errorf("dormant step counted %d writes, want 0", n)
+	if a, _, _ := tal.Today(); a != 0 {
+		t.Errorf("dormant step counted %d writes, want 0", a)
 	}
 }
 
 func TestStepDrivesWhenLive(t *testing.T) {
 	lp := &fakeLamp{}
+	tal := tally.Load(filepath.Join(t.TempDir(), "w.json"), time.UTC)
 	e := New(fakeProv{s: constSnap(40)}, lp, time.UTC, time.Minute)
+	e.SetTally(tal)
 	e.SetLive(true)
 	e.step()
 	if lp.count() == 0 {
 		t.Fatal("live engine must write to the lamp")
 	}
-	if n, _ := e.WritesToday(); n != 1 {
-		t.Errorf("live step counted %d writes, want 1", n)
+	if a, _, _ := tal.Today(); a != 1 {
+		t.Errorf("live step counted %d writes, want 1", a)
 	}
 	e.step() // unchanged output -> no second write
 	if lp.count() != 1 {

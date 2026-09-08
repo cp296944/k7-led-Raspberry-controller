@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/k7tcp"
+	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/tally"
 )
 
 // Snapshot is the engine's authoritative input for one tick — the base
@@ -72,9 +73,8 @@ type Engine struct {
 	// dormant, so the lamp resumes autonomous scheduling. Set by main.
 	repushFn func() error
 
-	// today's lamp-write tally (auto side); resets at local midnight.
-	writesDay string
-	autoWrites int
+	// shared, restart-surviving lamp-write tally; the engine bumps the auto side.
+	tally *tally.Counter
 
 	tickNow  chan struct{}
 	reticker chan struct{}
@@ -166,12 +166,11 @@ func (e *Engine) SetRepushFn(fn func() error) {
 	e.mu.Unlock()
 }
 
-// WritesToday returns the number of lamp writes the engine has made since local
-// midnight, and the date string that count belongs to.
-func (e *Engine) WritesToday() (int, string) {
+// SetTally wires the shared restart-surviving lamp-write counter.
+func (e *Engine) SetTally(t *tally.Counter) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.autoWrites, e.writesDay
+	e.tally = t
+	e.mu.Unlock()
 }
 
 // SetOverride installs or clears a timed full-output override.
@@ -304,22 +303,21 @@ func (e *Engine) step() {
 	err := e.lamp.Hand(toU8(out.Channels))
 	e.mu.Lock()
 	e.status.LastWriteOK = err == nil
+	tal := e.tally
 	if err == nil {
 		e.status.Sent = out.Channels
 		e.status.SentMs = time.Now().UnixMilli()
 		e.lastSent = out.Channels
 		e.haveSent = true
 		e.lastPush = time.Now()
-		day := now.Format("2006-01-02")
-		if day != e.writesDay {
-			e.writesDay, e.autoWrites = day, 0
-		}
-		e.autoWrites++
 	}
 	e.mu.Unlock()
 	if err != nil {
 		slog.Warn("engine: lamp write failed", "err", err)
 	} else {
+		if tal != nil {
+			tal.AddAuto()
+		}
 		slog.Debug("engine: pushed", "src", out.Source, "ch", out.Channels)
 	}
 }

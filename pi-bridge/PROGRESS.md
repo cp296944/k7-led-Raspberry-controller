@@ -170,7 +170,51 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 
 ---
 
-## Current state (2026-09-08 — pi-v1.0.0 in progress → 18/18)
+## Current state (2026-09-08 — pi-v1.0.1 in progress)
+
+### pi-v1.0.1 — write-counter persistence + soak monitor + update-apply fix
+Three things, all from user reports / the soak plan:
+1. **今日上傳次數 was resetting on every restart/OTA.** It was in-memory in the
+   engine + httpapi. New `internal/tally` — one shared `*tally.Counter`
+   (`data/writes.json`, day-bucketed, atomic write, flushed every 5 min + on
+   SIGTERM). engine `SetTally`, httpapi `Options.Tally`, piapi `Deps.Tally`;
+   `/api/output/status` reads it. Removed `engine.WritesToday` /
+   `httpapi.ManualWritesToday`. tests in `internal/tally`.
+2. **Soak monitor** (Phase 4). `cmd/k7-pi-bridge/diag.go` — `diagAPI` writes an
+   hourly line to `data/soak.log` (ts, ver, uptime, rss_kb [Linux only],
+   heap_kb, goroutines, gc, engine live, lamp_ops/fails/consec_fail, w_auto,
+   w_manual) and serves `GET /api/diag` = `{now: <snapshot>, log: <tail>}`
+   (`?lines=N`). `internal/lamp` gained `Stats()` (ops/fails/consec_fail;
+   engine + proxy conns only — httpapi opens its own, not counted).
+3. **`/api/update/apply` was too strict.** 0.9.8 required `tag` to exactly match
+   the available release → "available update is pi-v1.0.0, not the requested
+   pi-v0.9.10" when the page's cached status was stale. Now: only
+   `{confirm:true}` is required; `tag` is advisory; a newer release than the one
+   named is installed, and the response's `applying` says what. overlay polls
+   `res.applying` instead of the stale `d.available`.
+- `routes()` refactored to `(…, ui, extra ...func(*http.ServeMux))`; main passes
+  `setup.register, diag.register`.
+- Verified vs mock: 3×/api/hand → `writes_today.manual:3`; `/api/diag` snapshot
+  + soak.log startup line; `apply {confirm:true, tag:"pi-v0.5.0"}` →
+  `{applying:"pi-v1.0.0", requested:"pi-v0.5.0"}` (no more 409).
+
+## Current state (2026-09-08 — pi-v1.0.0 MERGED → 18/18 🎉)
+
+**PR #13 merged. origin/master == origin/dev/pi-bridge == bf76ddb. Release
+`pi-v1.0.0` published (arm64 binary). ALL 18 capability flags true — full 1:1
+with the ESP32 firmware.** User applies the OTA from the UI (confirmation
+dialog). This session shipped pi-v0.9.6 → pi-v1.0.0.
+
+### NEXT — Phase 4 tail, then Phase 5
+- 7-day unattended soak on the Pi (no lamp hammering — check the 今日上傳次數
+  counter stays sane; clean reconnect after a lamp power-cycle; no RSS growth in
+  `systemctl status` / `/proc/<pid>/status`). Needs real time on real hardware.
+- (minor) a dedicated diagnostics *view* — the warnings feed already backs the
+  inline "Checks" card; a fuller page is optional.
+- **Phase 5 = Home Assistant (`pi-v1.1`)**: `/api/ha/*` REST surface +
+  `custom_components/k7_lamp/` (light, 6×number, switch, select, buttons,
+  binary_sensor, sensor) → install into `D:\HomeAssistant\custom_components\`.
+  See DESIGN.md §7 for the entity list + endpoint shapes.
 
 ### pi-v1.0.0 — `setup_portal` + settings page → **18 / 18 capabilities**
 - `caps["setup_portal"] = true` in main.go (main loop now sets ALL 18 true).
