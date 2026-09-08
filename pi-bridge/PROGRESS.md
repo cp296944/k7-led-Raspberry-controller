@@ -99,14 +99,31 @@ Candidate upstream PR: `net.JoinHostPort` in k7tcp connect().
   #5 Base/Effective Today/Play-day chart modes (Effective needs Phase 3 overlays)
 
 ### Phase 3 — Always-on engine  (tags `pi-v0.5`..`0.9`)  ← the big port of Effects.cpp + Moon.cpp
-- [ ] v0.4 `persistent_controller_clock` + `/api/time` + `logs` + scheduler tick + `/api/output/status` + `/api/wifi/signal`
-- [ ] v0.5 `smooth_ramp` (`/api/ramp/*`) — default OFF, push-on-change, ≥2min
-- [ ] v0.6 `feed_mode` + `maintenance_mode` (`/api/feed/*`, `/api/maintenance/*`)
-- [ ] v0.7 `tracked_lunar` (moon phase 22.63N 120.30E, extends `/api/lunar/*`)
-- [ ] v0.8 `acclimation` (`/api/acclimation/*`)
-- [ ] v0.9 `seasonal_daylength` (`/api/seasonal/*`)
-- [ ] golden-vector tests vs ESP32 `/api/output/status` for the engine
+- [x] **v0.5.0** `persistent_controller_clock` + `logs` + engine tick + `/api/time` + `/api/output/status` + `/api/wifi/signal` + `/api/logs`  → **11/18**
+  - `internal/engine/model.go` — PURE port of Effects.cpp math: interpolate,
+    EffectiveSchedule (seasonal+UI shift resample + acclimation scale),
+    applySiesta/applyMaster/applyLunar, LunarWindow + clampWindowToNight,
+    Compute() = restoreScheduledOutputNow. `moon.go` = Moon.cpp. 8 golden tests.
+  - `internal/engine/engine.go` — tick loop (60s + Kick on push/master), diffs
+    vs lastSent, `Hand()` on change, tracks OutputStatus. Override hook (feed/maint).
+  - `internal/lamp` — single mutexed connection owner, generous timeouts, Health()
+  - `internal/ringlog` — bounded log + slog.Handler wrapper
+  - `internal/piapi` — middleware: the 4 new endpoints + engine.Provider (reads
+    httpapi StateSnapshot). Kicks engine on /api/push, /api/master.
+  - vendored httpapi getters added: StateSnapshot(), Device()
+  - verified vs mock: push schedule → engine kicked → output `[50,30,...]` sent within 2s
+- [ ] v0.6.0 `smooth_ramp` (`/api/ramp/start|stop|status|tick`) — default OFF, engine interval → 2min when active, push-on-change
+- [ ] v0.7.0 `feed_mode` + `maintenance_mode` (`/api/feed/*`, `/api/maintenance/*`) — timed engine.Override; buildMaintenanceChannels (MINI/PRO tables in Effects.cpp:79)
+- [ ] v0.8.0 `tracked_lunar` — flip flag; LunarWindow already ports trackMoonrise. Add `/api/lunar/*` to piapi? (fixed lunar is in vendored httpapi; tracked just needs the cap on + engine already does moon math)
+- [ ] v0.9.0 `acclimation` (`/api/acclimation/config|status`) + `seasonal_daylength` (`/api/seasonal/config|status`) — piapi gets its own small JSON store for these 2 configs; engine.Config already has the fields + math
+- [ ] golden-vector tests vs ESP32 `/api/output/status` (needs the ESP32 powered + on the lamp AP — user's bench unit)
 - [ ] **exit gate:** 17/18 caps, UI shows every control, all work
+
+NOTE for v0.6-0.9: piapi already has the Provider + engine wiring. Each tag =
+add endpoint handlers to piapi + flip the cap in main.go + (for accl/seasonal)
+a tiny config store. engine.Config fields + math are ALL already there.
+NOTE: `internal/lamp` gate is used by engine + proxy; vendored httpapi still
+opens its own per-call conns (brief, low collision risk). Unify if it bites.
 
 ### Phase 4 — Setup page + hardening  (tag `pi-v1.0`)
 - [ ] `setup_portal` equivalent (lamp SSID/IP settings page, wifi status, factory reset)

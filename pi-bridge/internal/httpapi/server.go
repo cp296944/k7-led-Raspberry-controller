@@ -8,7 +8,8 @@
 //     so Phase 3 can flip the 9 always-on flags true
 //   - store path + lamp identity come from Options (ConfigPath, LampHost/Port)
 //   - New() signature takes Options
-//   - added getters: LampName(), LegacyProfiles(), SetCapability()
+//   - added getters: LampName(), LegacyProfiles(), StateSnapshot(), Device(),
+//     SetCapability()
 // tools/check_httpapi_sync.py reports upstream drift (advisory).
 
 package httpapi
@@ -322,6 +323,27 @@ func (s *Server) LegacyProfiles() map[string]json.RawMessage {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return cloneProfiles(s.profiles)
+}
+
+// StateSnapshot returns a copy of the working state (schedule, manual, mode,
+// master, shift, siesta, lunar) — the always-on engine reads this each tick.
+func (s *Server) StateSnapshot() State {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	st := s.state
+	st.Manual = append([]int(nil), s.state.Manual...)
+	st.Schedule = make([][]int, len(s.state.Schedule))
+	for i, row := range s.state.Schedule {
+		st.Schedule[i] = append([]int(nil), row...)
+	}
+	return st
+}
+
+// Device returns the configured lamp model ("k7mini"|"k7pro").
+func (s *Server) Device() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config.Device
 }
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {

@@ -21,10 +21,14 @@ import (
 	"time"
 
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/config"
+	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/engine"
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/httpapi"
+	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/lamp"
+	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/piapi"
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/piweb"
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/profiles"
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/proxy"
+	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/ringlog"
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/updater"
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/version"
 )
@@ -46,11 +50,21 @@ func run(args []string) error {
 		return err
 	}
 
-	logger := newLogger(cfg.LogLevel)
+	rlog := ringlog.New(500)
+	logger := slog.New(ringlog.NewHandler(rlog, newLogger(cfg.LogLevel).Handler()))
 	slog.SetDefault(logger)
 	logger.Info("starting", "version", version.String(), "listen", cfg.Listen,
 		"lamp", fmt.Sprintf("%s:%d", cfg.LampHost, cfg.LampPort),
 		"install_root", cfg.InstallRoot, "data_dir", cfg.DataDir)
+
+	tz := time.Local
+	if cfg.Timezone != "" {
+		if loc, e := time.LoadLocation(cfg.Timezone); e == nil {
+			tz = loc
+		} else {
+			logger.Warn("bad timezone, using system", "tz", cfg.Timezone, "err", e)
+		}
+	}
 
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		return fmt.Errorf("create data dir: %w", err)
@@ -73,17 +87,27 @@ func run(args []string) error {
 		go updateLoop(ctx, up, d)
 	}
 
+	// Phase 3: the always-on engine drives the lamp; advertise its capabilities.
+	caps := httpapi.DefaultCapabilities()
+	caps["persistent_controller_clock"] = true
+	caps["logs"] = true
+
 	api, err := httpapi.New(httpapi.Options{
-		ConfigPath: filepath.Join(cfg.DataDir, "store.json"),
-		Version:    version.Version,
-		Timeout:    5 * time.Second,
-		Device:     "k7pro",
-		LampHost:   cfg.LampHost,
-		LampPort:   cfg.LampPort,
+		ConfigPath:   filepath.Join(cfg.DataDir, "store.json"),
+		Version:      version.Version,
+		Timeout:      5 * time.Second,
+		Device:       "k7pro",
+		LampHost:     cfg.LampHost,
+		LampPort:     cfg.LampPort,
+		Capabilities: caps,
 	})
 	if err != nil {
 		return fmt.Errorf("http api: %w", err)
 	}
+
+	lampConn := lamp.New(cfg.LampHost, cfg.LampPort)
+	eng := engine.New(piapi.NewProvider(api), lampConn, tz, 60*time.Second)
+	go eng.Run(ctx)
 
 	// Per-lamp profile store (isolated from OTA; keyed by lamp MAC/name).
 	profStore := profiles.New(cfg.DataDir, cfg.LampHost)
@@ -92,7 +116,14 @@ func run(args []string) error {
 
 	// pi-bridge UX layer over the unmodified upstream UI.
 	uiHandler := piweb.Wrap(piweb.Deps{
-		Next:       api.Routes(),
+		Next: piapi.Wrap(piapi.Deps{
+			Next:   api.Routes(),
+			API:    api,
+			Engine: eng,
+			Lamp:   lampConn,
+			Log:    rlog,
+			TZ:     tz,
+		}),
 		Profiles:   profStore,
 		Version:    version.Version,
 		UpdateRepo: cfg.UpdateRepo,
@@ -116,6 +147,7 @@ func run(args []string) error {
 		px := &proxy.Proxy{
 			Listen:   cfg.Proxy,
 			LampAddr: fmt.Sprintf("%s:%d", cfg.LampHost, cfg.LampPort),
+			Gate:     lampConn.Gate(),
 		}
 		go func() {
 			if err := px.Run(ctx); err != nil {
