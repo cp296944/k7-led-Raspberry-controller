@@ -16,6 +16,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -226,6 +228,59 @@ func routes(cfg config.Config, cfgPath string, up *updater.Updater, autoUpdate *
 			slog.Warn("save config", "err", err)
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"auto_update": *in.AutoUpdate})
+	})
+
+	// Release history for the version-chip changelog popup. Fetched server-side
+	// (no browser CORS / rate-limit worries), cached ~10 min.
+	var histMu sync.Mutex
+	var histAt time.Time
+	var histCache []byte
+	mux.HandleFunc("GET /api/update/history", func(w http.ResponseWriter, r *http.Request) {
+		histMu.Lock()
+		fresh := time.Since(histAt) < 10*time.Minute && histCache != nil
+		body := histCache
+		histMu.Unlock()
+		if !fresh {
+			req, _ := http.NewRequestWithContext(r.Context(), http.MethodGet,
+				"https://api.github.com/repos/"+cfg.UpdateRepo+"/releases?per_page=40", nil)
+			req.Header.Set("Accept", "application/vnd.github+json")
+			resp, err := http.DefaultClient.Do(req)
+			if err == nil && resp.StatusCode == http.StatusOK {
+				var raw []struct {
+					TagName     string `json:"tag_name"`
+					Name        string `json:"name"`
+					Body        string `json:"body"`
+					PublishedAt string `json:"published_at"`
+					Prerelease  bool   `json:"prerelease"`
+					HTMLURL     string `json:"html_url"`
+				}
+				if json.NewDecoder(resp.Body).Decode(&raw) == nil {
+					out := make([]map[string]any, 0, len(raw))
+					for _, x := range raw {
+						if !strings.HasPrefix(x.TagName, "pi-v") {
+							continue
+						}
+						out = append(out, map[string]any{
+							"tag": x.TagName, "name": x.Name, "notes": x.Body,
+							"published_at": x.PublishedAt, "prerelease": x.Prerelease, "url": x.HTMLURL,
+						})
+					}
+					body, _ = json.Marshal(map[string]any{"current": version.Version, "releases": out})
+					histMu.Lock()
+					histCache, histAt = body, time.Now()
+					histMu.Unlock()
+				}
+			}
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+		}
+		if body == nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "history unavailable"})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
 	})
 
 	mux.HandleFunc("POST /api/update/apply", func(w http.ResponseWriter, r *http.Request) {
