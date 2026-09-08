@@ -170,7 +170,10 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 
 ---
 
-## Current state (2026-09-08 — pi-v0.9.7 in progress)
+## Current state (2026-09-08 — pi-v0.9.7 merged)
+
+**PR #9 merged. origin/master == origin/dev/pi-bridge == 65ff115. Release
+`pi-v0.9.7` published by CI. User applies the OTA from the UI himself.**
 
 ### pi-v0.9.7 — engine model change + more UX (this session, after 0.9.6)
 User asked for a different engine model + several UX fixes. Built:
