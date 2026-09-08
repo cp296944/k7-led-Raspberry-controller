@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/httpapi"
+	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/lamp"
 )
 
 func newTestServer(t *testing.T) *httpapi.Server {
@@ -94,5 +95,39 @@ func TestPrebakePushNoOpForManualMode(t *testing.T) {
 	_ = json.Unmarshal(got, &m)
 	if _, ok := m["prebaked"]; ok {
 		t.Error("manual-mode push must not be pre-baked")
+	}
+}
+
+func TestWarningsFlagsDarkScheduleAndNoLamp(t *testing.T) {
+	h := &handler{Deps: Deps{
+		API:  newTestServer(t), // fresh store → all-zero schedule, mode "auto"
+		Lamp: lamp.New("127.0.0.1", 1), // never contacted
+		TZ:   time.UTC, WlanIf: "nonexistent0",
+	}, fx: NewEffectsStore(t.TempDir())}
+
+	rr := httptest.NewRecorder()
+	h.warnings(rr, httptest.NewRequest(http.MethodGet, "/api/warnings/status", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d", rr.Code)
+	}
+	var out struct {
+		Items []struct{ Level, Message string }
+		Count int
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("bad body: %s", rr.Body.String())
+	}
+	joined := ""
+	for _, it := range out.Items {
+		joined += it.Message + "\n"
+	}
+	if !bytes.Contains([]byte(joined), []byte("排程整天都是 0")) {
+		t.Errorf("want an all-zero-schedule warning, got: %q", joined)
+	}
+	if !bytes.Contains([]byte(joined), []byte("尚未成功連上燈具")) {
+		t.Errorf("want a no-lamp-contact warning, got: %q", joined)
+	}
+	if out.Count != len(out.Items) {
+		t.Errorf("count %d != len(items) %d", out.Count, len(out.Items))
 	}
 }

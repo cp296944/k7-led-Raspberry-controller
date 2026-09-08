@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -68,9 +69,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/api/logs":
 		h.logs(w, r)
 	case "/api/warnings/status":
-		// Phase 4 adds a real warnings feed; until then answer 200 with an
-		// empty list so the shared UI doesn't log a 404 on every poll.
-		writeJSON(w, http.StatusOK, map[string]any{"warnings": []any{}, "count": 0})
+		h.warnings(w, r)
 
 	case "/api/ramp/status":
 		h.rampStatus(w, r)
@@ -337,6 +336,74 @@ func (h *handler) outputStatus(w http.ResponseWriter, r *http.Request) {
 		Live:         h.Engine.Live(),
 		WritesToday:  writesToday{Auto: auto, Manual: manual, Date: day},
 	})
+}
+
+// warnings backs the shared UI's "Checks" card: a live list of things that
+// would keep the tank from being lit the way the schedule says. Phase 4 may
+// grow this; the shape is {items:[{level,message}], count}.
+func (h *handler) warnings(w http.ResponseWriter, r *http.Request) {
+	type item struct {
+		Level   string `json:"level"`
+		Message string `json:"message"`
+	}
+	var items []item
+	add := func(level, msg string) { items = append(items, item{level, msg}) }
+
+	if !engine.ClockSane() {
+		add("error", "控制器時鐘尚未設定 — 排程不會執行 (controller clock not set)")
+	}
+
+	if h.Lamp != nil {
+		lh := h.Lamp.Health()
+		if lh.LastOKAt.IsZero() {
+			add("warn", "尚未成功連上燈具 (no successful contact with the lamp yet)")
+		} else if !lh.OK {
+			msg := "最近一次連燈失敗 (last lamp contact failed)"
+			if lh.LastErr != "" {
+				msg += ": " + lh.LastErr
+			}
+			add("warn", msg)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if b, err := exec.CommandContext(ctx, "iw", "dev", h.WlanIf, "link").CombinedOutput(); err == nil {
+		if m := reSignal.FindStringSubmatch(string(b)); m != nil {
+			if n, e := strconv.Atoi(m[1]); e == nil && rssiToQuality(n) < 35 {
+				add("warn", fmt.Sprintf("Wi-Fi 到燈具訊號偏弱 (%d%%, %d dBm) — 把 Pi 移近水槽可改善", rssiToQuality(n), n))
+			}
+		}
+	}
+
+	if h.API != nil {
+		st := h.API.StateSnapshot()
+		if st.Mode != "manual" && scheduleAllZero(st.Schedule) {
+			add("warn", "目前排程整天都是 0 — 燈會全暗。載入預設或設定檔後按 ⬆ 推送")
+		}
+	}
+
+	if h.Engine != nil {
+		if s := h.Engine.Status(); s.SentMs > 0 && !s.LastWriteOK {
+			add("warn", "最近一次送給燈具的指令失敗 (last write to the lamp failed)")
+		}
+	}
+
+	if items == nil {
+		items = []item{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+}
+
+func scheduleAllZero(rows [][]int) bool {
+	for _, row := range rows {
+		for i := 2; i < len(row); i++ {
+			if row[i] != 0 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (h *handler) logs(w http.ResponseWriter, r *http.Request) {
