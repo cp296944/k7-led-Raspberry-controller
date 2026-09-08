@@ -81,7 +81,24 @@ KNOWN NIT: `go vet` can't run on cmd/httpapi (they import vendored k7tcp which h
 an upstream `%s:%d` IPv6 printf nit) — CI vets config/version/updater/proxy only.
 Candidate upstream PR: `net.JoinHostPort` in k7tcp connect().
 
-### Phase 3 — Always-on engine  (tags `pi-v0.4`..`0.9`)  ← the big port of Effects.cpp + Moon.cpp
+### Phase 2.5 — pi-bridge UX layer  ✅ DONE (tag `pi-v0.4.0`)  [user requests]
+- [x] `internal/piweb` — one middleware over httpapi: serves `/pi/*`, injects
+  `<script src="/pi/overlay.js">` into HTML (upstream files untouched),
+  intercepts `/api/profiles*`, rewrites `/api/push` for `schedule_shift_minutes`
+- [x] `assets/overlay.js` + `dict-zh-Hant.json` (105 terms) — zh-Hant translation
+  of basic UI text (exact-match only, proper nouns left alone; 中/EN toggle) +
+  an Updates widget (`/api/update/status` + `/api/update/apply`) + version footer
+- [x] `internal/profiles` — per-lamp profile store `data/profiles/<lampID>/*.json`
+  (lampID = lamp MAC via `ip neigh`, else lamp name, else default); one-time
+  migration from the legacy store.json map; survives OTA. tests.
+- [x] FIX #4: `/api/push` now honours `schedule_shift_minutes` (rotates the 24
+  rows) — upstream pc-bridge silently ignored it
+- [x] getters added to vendored httpapi: `LampName()`, `LegacyProfiles()`
+- [x] tests: piweb shift-rotation + HTML injection; profiles per-lamp isolation + migrate
+- answers given to user: #4 Shift = photoperiod time-shift (was upstream no-op);
+  #5 Base/Effective Today/Play-day chart modes (Effective needs Phase 3 overlays)
+
+### Phase 3 — Always-on engine  (tags `pi-v0.5`..`0.9`)  ← the big port of Effects.cpp + Moon.cpp
 - [ ] v0.4 `persistent_controller_clock` + `/api/time` + `logs` + scheduler tick + `/api/output/status` + `/api/wifi/signal`
 - [ ] v0.5 `smooth_ramp` (`/api/ramp/*`) — default OFF, push-on-change, ≥2min
 - [ ] v0.6 `feed_mode` + `maintenance_mode` (`/api/feed/*`, `/api/maintenance/*`)

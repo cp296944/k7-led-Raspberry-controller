@@ -22,6 +22,8 @@ import (
 
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/config"
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/httpapi"
+	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/piweb"
+	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/profiles"
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/proxy"
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/updater"
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/version"
@@ -83,9 +85,22 @@ func run(args []string) error {
 		return fmt.Errorf("http api: %w", err)
 	}
 
+	// Per-lamp profile store (isolated from OTA; keyed by lamp MAC/name).
+	profStore := profiles.New(cfg.DataDir, cfg.LampHost)
+	profStore.NameHint = api.LampName
+	profStore.Migrate(profStore.LampID(ctx), api.LegacyProfiles())
+
+	// pi-bridge UX layer over the unmodified upstream UI.
+	uiHandler := piweb.Wrap(piweb.Deps{
+		Next:       api.Routes(),
+		Profiles:   profStore,
+		Version:    version.Version,
+		UpdateRepo: cfg.UpdateRepo,
+	})
+
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           routes(cfg, up, api),
+		Handler:           routes(cfg, up, uiHandler),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -121,7 +136,7 @@ func run(args []string) error {
 	return srv.Shutdown(shutCtx)
 }
 
-func routes(cfg config.Config, up *updater.Updater, api *httpapi.Server) http.Handler {
+func routes(cfg config.Config, up *updater.Updater, ui http.Handler) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -169,10 +184,11 @@ func routes(cfg config.Config, up *updater.Updater, api *httpapi.Server) http.Ha
 		}()
 	})
 
-	// Everything else — the shared UI, /api/version, /api/capabilities, and the
-	// pc-bridge endpoint set — is served by the vendored httpapi package. Go 1.22
-	// ServeMux gives the specific patterns above precedence over this "/".
-	mux.Handle("/", api.Routes())
+	// Everything else — the shared UI (with the pi-bridge overlay), /api/version,
+	// /api/capabilities, the pc-bridge endpoint set, /pi/*, and the per-lamp
+	// profile store — is the piweb-wrapped httpapi handler. Go 1.22 ServeMux
+	// gives the specific patterns above precedence over this "/".
+	mux.Handle("/", ui)
 
 	return logRequests(mux)
 }

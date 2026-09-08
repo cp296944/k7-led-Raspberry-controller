@@ -8,6 +8,7 @@
 //     so Phase 3 can flip the 9 always-on flags true
 //   - store path + lamp identity come from Options (ConfigPath, LampHost/Port)
 //   - New() signature takes Options
+//   - added getters: LampName(), LegacyProfiles(), SetCapability()
 // tools/check_httpapi_sync.py reports upstream drift (advisory).
 
 package httpapi
@@ -305,6 +306,22 @@ func (s *Server) SetCapability(name string, on bool) {
 	s.mu.Lock()
 	s.capabilities[name] = on
 	s.mu.Unlock()
+}
+
+// LampName returns the lamp's advertised name from the last successful read
+// ("" if never read). pi-bridge uses it as a profile-storage key fallback.
+func (s *Server) LampName() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.state.Name
+}
+
+// LegacyProfiles returns a copy of the profiles held in the pc-bridge-style
+// store, so pi-bridge can migrate them into its per-lamp layout once.
+func (s *Server) LegacyProfiles() map[string]json.RawMessage {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return cloneProfiles(s.profiles)
 }
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
