@@ -167,14 +167,28 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 ---
 
 ## Current state (2026-09-08)
-- **PR #1 MERGED** (Phases 0–2.5). Phase 3 work → PR #2 on `dev/pi-bridge`
-  (also carries the pi-v0.4.1 UX fix until merged).
-- **Pi is running `pi-v0.5.0`** — always-on engine LIVE (tick loop driving the real K7 Pro).
-- REAL wlan0 signal measured: RSSI -73 dBm / 54% / 24 Mbps (Pi far from tank; engine copes, last_write_ok true). User will move the Pi closer later.
-- Releases: pi-v0.1.0 … pi-v0.5.0. Capabilities: **11 / 18**.
-- master branch protected: no force-push, no deletion (no review requirement).
-- pi-v0.4.1: explicit-apply — overlay.js neuters upstream's auto-push; master/
-  shift/mode edits stay local until the user presses ⬆ Push (dirty indicator).
+- **PR #1 + #2 MERGED.** Phase 3 v0.6–0.9 → PR #3 on `dev/pi-bridge`.
+- **Pi is running `pi-v0.5.1`** — always-on engine LIVE driving the real K7 Pro.
+- Releases: pi-v0.1.0 … pi-v0.5.1. Capabilities: **11 / 18**.
+- REAL wlan0: RSSI -73 dBm / 54% / 24 Mbps (Pi far from tank; engine copes). User relocates Pi later.
+- master branch protected: no force-push / no deletion (no review requirement).
+- README.md has a top-of-file fork banner (only diff vs upstream — trivial merges).
+
+### NEXT (for a resumed session): pi-v0.6.0 = `smooth_ramp`
+- add `/api/ramp/start|stop|status|tick` to `internal/piapi` (POST start/stop/tick, GET status)
+- ramp state (on/off, last_tick) persisted in a small piapi JSON store under DataDir
+- when ramp ON: `engine.SetInterval(2*time.Minute)` (add that method) so the tick
+  loop pushes interpolated values every ~2 min instead of 60s; when OFF back to 60s.
+  Engine ALREADY interpolates + diffs + push-on-change, so "smooth ramp" ≈ just
+  the faster cadence. Default OFF (flash write-wear — Effects.cpp comment).
+- flip `caps["smooth_ramp"] = true` in main.go
+- `/api/ramp/status` shape (from shared-ui `DEFAULT_STATUS.ramp`): `{active:bool, last_tick:<epoch or iso>}`
+- UI has a consent modal for ramp (`#rampConsentModal`) — it POSTs /api/ramp/start after consent; just need the endpoint to 200
+- deploy pi-v0.6.0, verify `/api/ramp/*` + that output changes more often with it on
+Then v0.7 (feed+maintenance), v0.8 (tracked_lunar — likely just cap flip + maybe
+`/api/lunar/*` passthrough since fixed lunar is already in vendored httpapi and
+engine does moon math), v0.9 (acclimation+seasonal — piapi gets a config store;
+engine.Config already has the fields+math). See Phase 3 checklist notes.
 - Real lamp verified: MAC `4a:55:19:ec:b0:49`, profiles migrated to
   `data/profiles/mac-4a_55_19_ec_b0_49/` (user's `BRS_AB`, `K7_Pro42113`).
 - User confirmed the UI renders + works in a browser.
