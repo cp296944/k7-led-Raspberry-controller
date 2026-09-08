@@ -165,8 +165,8 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 ---
 
 ## Current state (2026-09-08 — end of session)
-- **All merged to master through PR #4.** Pi running `pi-v0.9.0`.
-- **Capabilities: 17 / 18** — only `setup_portal` left (Phase 4).
+- **All merged to master through PR #6** (pi-v0.9.5). Pi is running `pi-v0.9.5`.
+- **Capabilities: 17 / 18** — only `setup_portal` left (Phase 4). origin/master == origin/dev/pi-bridge == 42f4267 (clean).
 - The always-on engine drives the real K7 Pro 24/7: schedule interpolation,
   smooth-ramp cadence, feed/maintenance timed overrides, tracked lunar,
   acclimation, seasonal shift. Feed was verified changing the physical lamp.
