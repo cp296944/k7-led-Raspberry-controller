@@ -170,10 +170,52 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 
 ---
 
+## Current state (2026-09-08 — pi-v0.9.7 in progress)
+
+### pi-v0.9.7 — engine model change + more UX (this session, after 0.9.6)
+User asked for a different engine model + several UX fixes. Built:
+- **Smooth Ramp is now the "who drives the lamp" switch** (`engine.SetLive`):
+  - OFF (default) → engine **dormant**, sends nothing. `/api/push` writes the
+    full 24-slot 0x1007 schedule once; the lamp runs it itself.
+  - ON → engine is the live driver, tick **10 min** (was 60s), 0x1005 on change.
+  - Feed/Maintenance overrides still drive 0x1005 regardless; when a timed
+    override ends while dormant the engine calls `RepushFn` (= `httpapi.Server.
+    Republish`) to re-arm the lamp's own 0x1007 schedule. `rampStop` re-arms too.
+- **Push pre-bakes the full "today snapshot"** when ramp is off (`piapi.
+  prebakePush`): runs `engine.Compute()` hour-by-hour so acclimation, seasonal
+  shift, tracked lunar, siesta, master are all folded into the 24 rows, then
+  adds `"prebaked":true` so `httpapi.handlePush` sends them verbatim instead of
+  baking a second time. (User's Q1 choice: snapshot only at Push, engine
+  doesn't keep them current when dormant.)
+- **Shift fix**: overlay's `pushSchedule` wrap re-reads after a shifted push, so
+  the Base chart shows the rotated schedule and the `+Nh` counter resets →
+  fixes "Shift only shows in Effective Today" + the double-shift-on-re-Push bug.
+- **Spectrum value table** is always open under the chart (no collapse) — user
+  wants chart + table visible together for tuning.
+- **Today's lamp-write counter** in the top bar: `📤 今日 自動 X · 手動 Y`
+  (`/api/output/status` now returns `live` + `writes_today:{auto,manual,date}`;
+  engine counts its writes, httpapi counts push/hand/preview/re-arm; reset at
+  local midnight, server-local date).
+- `engine.New` now takes an `engine.Lamp` interface (satisfied by `*lamp.Lamp`)
+  so tests can inject a fake — new tests: dormant-vs-live, override re-arm,
+  write counting. New `piapi_test.go`: prebake bakes acclimation, no-ops when
+  ramp on / manual mode.
+- Verified locally vs mock in the browser: table always-open, write chip,
+  ramp on→live:true + auto count, ramp off→live:false + re-arm (+manual count),
+  shift→push→shift resets. (Mock's readAll returns an empty schedule so it
+  can't validate the shift row-rotation round-trip — real lamp returns the
+  stored schedule; piweb rotation is unit-tested.)
+- **KNOWN pre-existing issue (not fixed, both off for this user):** if siesta or
+  lunar are enabled in `state` AND smooth ramp is ON, the engine may
+  double-apply them (httpapi baked them into `state.Schedule`, engine's Config
+  re-applies). Untangle when it bites.
+
 ## Current state (2026-09-08 — end of session)
 - **All merged to master through PR #7** (pi-v0.9.5 + PROGRESS). origin/master ==
   origin/dev/pi-bridge == 079ef0b was the baseline for this session.
-- **pi-v0.9.6 in progress on `dev/pi-bridge`** — three user-reported fixes:
+- **pi-v0.9.6 merged (PR #8, origin/master == origin/dev/pi-bridge == 9d93517).**
+  Release `pi-v0.9.6` published by CI. User applies the OTA from the UI himself.
+  Three user-reported fixes:
   1. **Read buttons were no-ops on the Pi.** Root cause: upstream
      `readControllerState()` only does a live `/api/lamp/read` when platform is
      `pc_bridge`; on `pi_bridge` it just reloads the local `/api/state` cache.
@@ -209,20 +251,20 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 - Working dir: `D:\HomeAssistant\K7\K7_Pi_Wifi_Controller`; ESP32 flash scripts
   in `..\esp32-flash-experiment\`. Scheduled resume task: OFF (user disabled).
 
-### NEXT (this session): finish pi-v0.9.6
-- build/vet/test/arm64 all green ✅ (done)
-- commit + push `dev/pi-bridge`, tag `pi-v0.9.6`, wait CI
-- deploy to Pi **scratch port :19999** (K7_DATA_DIR=/tmp/xxx --proxy ""), do NOT
-  OTA the running :80 service — show the user, he applies the update himself
-- verify: both Read buttons trigger a lamp readAll; 光譜數值表 appears under the
-  chart in Auto mode and is live-linked
-- gh pr create → CI green → merge → sync dev
+### pi-v0.9.6 — DONE
+- build/vet/test/arm64/k7tcp-sync all green ✅
+- committed, pushed, tagged `pi-v0.9.6`, CI green, PR #8 merged, dev synced ✅
+- verified locally against `tools/mock_k7pro_lamp.py` in the in-app browser:
+  both Read buttons issue `GET /api/lamp/read` (200); 光譜數值表 mounts under the
+  chart in Auto mode, expands, and live-links to the chart datasets when a
+  preset is loaded.
+- NOT deployed to the Pi scratch port — the JS fixes are fully browser-side and
+  the real lamp currently has an all-zero schedule anyway, so a scratch-port
+  engine would only risk dual lamp control for no extra signal. User applies the
+  OTA + repopulates the schedule from the UI (his stated workflow).
 
-### Open feature request (queued, not started)
-- **引擎託管 / 燈自主 切換**: a UI switch for "Pi drives the lamp live (0x1005)"
-  vs "push the 24-slot schedule once and let the lamp run itself, engine idle".
-  Today the architecture is always Pi-as-brain. User asked whether this is
-  wanted — pending his answer.
+### DONE (was "open feature request"): 引擎託管 / 燈自主 切換
+Implemented as pi-v0.9.7 — Smooth Ramp is the switch (see above).
 
 ### NEXT (when the user says go): Phase 4 = `pi-v1.0.0` → 18/18
 - `setup_portal` cap + a settings page: lamp host/port, wifi status, factory
@@ -277,7 +319,11 @@ _(none)_
 - 2026-09-08 (later) — **pi-v0.9.6**: fixed dead Read buttons (overlay wraps
   readFromDevice → /api/lamp/read), fixed missing 光譜數值表 (window.chart is
   let-scoped → use Chart.getChart), README divergence section + Hard-rule.
-  User will apply the OTA + repopulate the schedule via the UI himself.
+- 2026-09-08 (later still) — **pi-v0.9.7**: Smooth Ramp = live-driver switch
+  (engine dormant when off), Push pre-bakes today's effect snapshot when ramp
+  off, Shift re-reads after Push (fixes double-shift + visibility), value table
+  always open, top-bar 今日上傳次數 counter (auto/manual). engine.Lamp interface
+  for testability. See "Current state" above for detail.
 - 2026-09-08 — **Phase 1 done.** updater + CI + deploy scripts. Deployed to Pi.
   OTA self-update AND rollback both verified on real hardware end-to-end.
   Pi running pi-v0.2.0. Next: **Phase 2** — vendor+adapt the pc-bridge HTTP

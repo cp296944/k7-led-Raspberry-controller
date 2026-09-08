@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/k7tcp"
-	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/lamp"
 )
 
 // Snapshot is the engine's authoritative input for one tick — the base
@@ -23,6 +22,13 @@ type Snapshot struct {
 // httpapi store).
 type Provider interface {
 	EngineSnapshot() Snapshot
+}
+
+// Lamp is the subset of *lamp.Lamp the engine drives (satisfied by *lamp.Lamp;
+// a fake stands in for tests).
+type Lamp interface {
+	Hand(ch [k7tcp.Channels]uint8) error
+	SyncTime() error
 }
 
 // Override is a timed full-output replacement (Feed / Maintenance). Nil = none.
@@ -44,7 +50,7 @@ type OutputStatus struct {
 
 type Engine struct {
 	prov Provider
-	lamp *lamp.Lamp
+	lamp Lamp
 	tz   *time.Location
 
 	mu       sync.Mutex
@@ -52,14 +58,29 @@ type Engine struct {
 	lastSent [Channels]int
 	haveSent bool
 	override *Override
+	overrideWas bool // was an override active on the previous tick?
 	interval time.Duration // live-tunable (smooth ramp)
 	lastPush time.Time
+
+	// live is true only while smooth-ramp is on: the engine is then the live
+	// driver, pushing interpolated output to the lamp every tick. When false
+	// the engine is dormant — the lamp runs the 24-slot 0x1007 schedule that
+	// /api/push last wrote — except that Feed/Maintenance overrides still work.
+	live bool
+	// repushFn re-arms the lamp's own schedule (re-sends 0x1007). Called when
+	// the engine stops being the live driver or a timed override ends while
+	// dormant, so the lamp resumes autonomous scheduling. Set by main.
+	repushFn func() error
+
+	// today's lamp-write tally (auto side); resets at local midnight.
+	writesDay string
+	autoWrites int
 
 	tickNow  chan struct{}
 	reticker chan struct{}
 }
 
-func New(prov Provider, l *lamp.Lamp, tz *time.Location, interval time.Duration) *Engine {
+func New(prov Provider, l Lamp, tz *time.Location, interval time.Duration) *Engine {
 	if tz == nil {
 		tz = time.Local
 	}
@@ -111,6 +132,46 @@ func (e *Engine) LastPush() time.Time {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.lastPush
+}
+
+// SetLive switches the engine between live-driving (smooth ramp on: push
+// interpolated output every tick) and dormant (smooth ramp off: the lamp runs
+// its own pushed 0x1007 schedule; the engine only steps in for Feed/Maintenance
+// overrides). Kicks a tick on change.
+func (e *Engine) SetLive(on bool) {
+	e.mu.Lock()
+	changed := e.live != on
+	e.live = on
+	if changed {
+		e.haveSent = false // force a fresh send when live-driving resumes
+	}
+	e.mu.Unlock()
+	if changed {
+		slog.Info("engine live-driving changed", "live", on)
+		e.Kick()
+	}
+}
+
+// Live reports whether the engine is currently the live driver.
+func (e *Engine) Live() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.live
+}
+
+// SetRepushFn wires the callback that re-arms the lamp's own schedule.
+func (e *Engine) SetRepushFn(fn func() error) {
+	e.mu.Lock()
+	e.repushFn = fn
+	e.mu.Unlock()
+}
+
+// WritesToday returns the number of lamp writes the engine has made since local
+// midnight, and the date string that count belongs to.
+func (e *Engine) WritesToday() (int, string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.autoWrites, e.writesDay
 }
 
 // SetOverride installs or clears a timed full-output override.
@@ -172,24 +233,70 @@ func (e *Engine) step() {
 		return
 	}
 
-	var out Output
 	e.mu.Lock()
 	ov := e.override
+	live := e.live
+	wasOverride := e.overrideWas
+	repush := e.repushFn
 	e.mu.Unlock()
-	if ov != nil && now.Before(ov.Until) {
+
+	overrideActive := ov != nil && now.Before(ov.Until)
+
+	var out Output
+	if overrideActive {
 		out = Output{Channels: ov.Channels, Source: ov.Source}
 	} else {
 		snap := e.prov.EngineSnapshot()
 		out = snap.Config.Compute(snap.Base, snap.Manual, snap.AutoMode, now)
 	}
 
+	overrideJustEnded := wasOverride && !overrideActive
+	e.mu.Lock()
+	e.overrideWas = overrideActive
+	e.mu.Unlock()
+
 	e.mu.Lock()
 	e.status.Target = out.Channels
 	e.status.TargetMs = now.UnixMilli()
 	e.status.Source = out.Source
-	changed := !e.haveSent || out.Channels != e.lastSent
-	e.mu.Unlock()
 
+	// A timed override (Feed/Maintenance) just ended while the engine is not the
+	// live driver: re-arm the lamp's own 0x1007 schedule so it resumes its
+	// autonomous curve instead of holding the last override value, then stay
+	// dormant.
+	if overrideJustEnded && !live {
+		e.status.Sent = out.Channels
+		e.status.SentMs = now.UnixMilli()
+		e.status.LastWriteOK = true
+		e.haveSent = false
+		e.mu.Unlock()
+		if repush != nil {
+			if err := repush(); err != nil {
+				slog.Warn("engine: re-arm lamp schedule after override failed", "err", err)
+			} else {
+				slog.Info("engine: override ended, re-armed lamp schedule")
+			}
+		}
+		return
+	}
+
+	// Decide whether to actively write this tick:
+	//   override active           -> yes (Feed/Maintenance must reach the lamp)
+	//   live driver (smooth ramp)  -> yes, on change
+	//   otherwise                  -> no; the lamp runs its own pushed schedule
+	drive := overrideActive || live
+	if !drive {
+		// dormant: the lamp runs its own pushed 0x1007 schedule, so the
+		// computed target is (as far as we know) what it is showing.
+		e.status.Sent = out.Channels
+		e.status.SentMs = now.UnixMilli()
+		e.status.LastWriteOK = true
+		e.haveSent = false
+		e.mu.Unlock()
+		return
+	}
+	changed := overrideJustEnded || !e.haveSent || out.Channels != e.lastSent
+	e.mu.Unlock()
 	if !changed {
 		return
 	}
@@ -203,6 +310,11 @@ func (e *Engine) step() {
 		e.lastSent = out.Channels
 		e.haveSent = true
 		e.lastPush = time.Now()
+		day := now.Format("2006-01-02")
+		if day != e.writesDay {
+			e.writesDay, e.autoWrites = day, 0
+		}
+		e.autoWrites++
 	}
 	e.mu.Unlock()
 	if err != nil {

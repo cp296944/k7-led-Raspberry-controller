@@ -119,7 +119,13 @@ func run(args []string) error {
 		return fmt.Errorf("http api: %w", err)
 	}
 
-	eng := engine.New(piapi.NewProvider(api, fx, tz), lampConn, tz, 5*time.Minute)
+	eng := engine.New(piapi.NewProvider(api, fx, tz), lampConn, tz, 10*time.Minute)
+	// When the engine stops live-driving (smooth ramp off) or a timed override
+	// ends, hand the lamp back its own 0x1007 schedule.
+	eng.SetRepushFn(api.Republish)
+	// Persisted smooth-ramp state decides whether the engine drives live; piapi
+	// re-asserts this in Wrap(), this just avoids a momentary wrong mode on boot.
+	eng.SetLive(fx.Ramp.Active)
 	go eng.Run(ctx)
 
 	// Per-lamp profile store (isolated from OTA; keyed by lamp MAC/name).

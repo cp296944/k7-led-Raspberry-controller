@@ -230,8 +230,16 @@
       if (typeof orig !== 'function') return;
       window[fn] = async function () {
         try { await window.api('POST', '/api/master', { value: curMaster() }); } catch (e) {}
+        var sv = document.getElementById('shiftVal');
+        var hadShift = fn === 'pushSchedule' && sv && sv.textContent.trim() !== '+0h';
         var r = await orig.apply(this, arguments);
         setDirty(false);
+        // The server rotated the 24 rows by the shift and now reports shift = 0.
+        // Re-read so the Base chart shows the rotated schedule and the counter
+        // resets — otherwise the next Push would shift it a second time.
+        if (hadShift && typeof window.readFromDevice === 'function') {
+          try { await window.readFromDevice(); } catch (e) {}
+        }
         return r;
       };
     });
@@ -328,6 +336,30 @@
     setInterval(poll, 15000);
   }
 
+  // ---- today's lamp-write counter (in the topbar) ----------------------
+  // Auto  = writes the always-on engine made (smooth ramp / feed / maintenance).
+  // Manual = writes you triggered (Push / Preview / re-arm). Resets at midnight.
+  function mountWrites() {
+    var hdr = document.getElementById('k7pi-hdr');
+    if (!hdr || document.getElementById('k7pi-writes')) return;
+    var s = el('span', { id: 'k7pi-writes' });
+    s.style.cssText = 'font-size:0.78rem;padding:2px 6px;border-radius:5px;border:1px solid var(--border,#444a58);white-space:nowrap';
+    hdr.appendChild(s);
+    var poll = function () {
+      fetch('/api/output/status').then(function (r) { return r.json(); }).then(function (d) {
+        var w = d.writes_today || {};
+        var a = w.auto || 0, m = w.manual || 0;
+        var autoL = dict['auto'] || '自動', manL = dict['manual'] || '手動', todayL = dict['today'] || '今日';
+        s.textContent = '📤 ' + todayL + ' ' + autoL + ' ' + a + ' · ' + manL + ' ' + m;
+        s.style.color = (a + m) >= 200 ? '#e0a53a' : 'var(--muted,#8a95a3)';
+        s.title = (dict['Lamp writes since local midnight'] || '本地午夜起對燈的寫入次數') +
+                  (d.live ? ' · ' + (dict['engine live-driving'] || 'engine 即時驅動中') : '');
+      }).catch(function () {});
+    };
+    poll();
+    setInterval(poll, 15000);
+  }
+
   // ---- FEAT-A: 光譜數值表 (live-linked with the chart) -------------------
   // The grid mirrors chart.data.datasets: pick a profile / drag a point / press
   // Read and the numbers follow; type a number and the chart follows, live.
@@ -380,21 +412,16 @@
     var anchor = document.getElementById('autoPanel') || document.querySelector('.chart-canvas-wrap');
     if (!anchor || !liveChart()) return;
 
+    // Always open — the user wants the chart and the value table side by side
+    // for tuning, no collapse.
     var box = el('div', { id: 'k7pi-grid' });
     box.style.cssText = 'margin-top:10px;border:1px solid var(--border,#2c343d);border-radius:8px;background:var(--surface,#1c2229);overflow:hidden';
-    var head = el('button', { type: 'button' });
-    head.style.cssText = 'width:100%;text-align:left;background:var(--surface2,#262e37);border:0;color:var(--text,#e7ecf1);padding:9px 12px;cursor:pointer;font:inherit;font-weight:600';
-    var body = el('div'); body.hidden = true; body.style.cssText = 'padding:10px 12px 14px';
-    var setLabel = function () { head.textContent = GRID_TITLE() + (body.hidden ? '  ▾' : '  ▴'); };
-    setLabel();
-    var timer = null;
-    head.onclick = function () {
-      body.hidden = !body.hidden;
-      setLabel();
-      if (!body.hidden && !body.dataset.built) { buildGrid(body); body.dataset.built = '1'; }
-      if (!body.hidden) { timer = setInterval(function () { body._sync && body._sync(); }, 400); }
-      else if (timer) { clearInterval(timer); timer = null; }
-    };
+    var head = el('div');
+    head.style.cssText = 'background:var(--surface2,#262e37);color:var(--text,#e7ecf1);padding:9px 12px;font:inherit;font-weight:600';
+    head.textContent = GRID_TITLE();
+    var body = el('div'); body.style.cssText = 'padding:10px 12px 14px';
+    buildGrid(body);
+    setInterval(function () { body._sync && body._sync(); }, 400);
     box.appendChild(head); box.appendChild(body);
     anchor.appendChild(box);
   }
@@ -486,6 +513,7 @@
         retranslateAll();
         mountHeaderControls();
         mountWifi();
+        mountWrites();
         mountValueTable();
         mountVersionChangelog();
         installExplicitApply();
@@ -495,6 +523,7 @@
           installExplicitApply();
           mountHeaderControls();
           mountWifi();
+          mountWrites();
           mountValueTable();
         mountVersionChangelog();
           if (installExplicitApply.done || ++tries > 40) clearInterval(iv);

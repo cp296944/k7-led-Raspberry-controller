@@ -1,19 +1,51 @@
 package engine
 
 import (
-	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/lamp"
+	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/k7tcp"
 )
 
 type fakeProv struct{ s Snapshot }
 
 func (f fakeProv) EngineSnapshot() Snapshot { return f.s }
 
+// fakeLamp records writes so tests can assert whether the engine drove the lamp.
+type fakeLamp struct {
+	mu     sync.Mutex
+	hands  int
+	last   [k7tcp.Channels]uint8
+	failed bool
+}
+
+func (l *fakeLamp) Hand(ch [k7tcp.Channels]uint8) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.hands++
+	l.last = ch
+	if l.failed {
+		return errors.New("boom")
+	}
+	return nil
+}
+func (l *fakeLamp) SyncTime() error { return nil }
+func (l *fakeLamp) count() int      { l.mu.Lock(); defer l.mu.Unlock(); return l.hands }
+
+func constSnap(v int) Snapshot {
+	var s Snapshot
+	s.AutoMode = true
+	s.Config.MasterBrightness = 100
+	for h := 0; h < Slots; h++ {
+		s.Base[h] = [8]int{h, 0, v, v, v, v, v, v}
+	}
+	return s
+}
+
 func TestSetInterval(t *testing.T) {
-	e := New(fakeProv{}, lamp.New("127.0.0.1", 1), time.UTC, time.Minute)
+	e := New(fakeProv{}, &fakeLamp{}, time.UTC, time.Minute)
 	if e.Interval() != time.Minute {
 		t.Fatalf("initial interval = %v", e.Interval())
 	}
@@ -28,7 +60,7 @@ func TestSetInterval(t *testing.T) {
 }
 
 func TestOverride(t *testing.T) {
-	e := New(fakeProv{}, lamp.New("127.0.0.1", 1), time.UTC, time.Minute)
+	e := New(fakeProv{}, &fakeLamp{}, time.UTC, time.Minute)
 	if a, _, _ := e.OverrideActive(); a {
 		t.Fatal("no override expected initially")
 	}
@@ -49,19 +81,78 @@ func TestOverride(t *testing.T) {
 }
 
 func TestStepAppliesOverride(t *testing.T) {
-	// engine.step with an active override should target the override channels
-	// even when the schedule says otherwise. We can't reach a real lamp, so
-	// just check status tracking (lamp.Hand will fail fast to 127.0.0.1:1).
+	// engine.step with an active override should target + drive the override
+	// channels even when the schedule says otherwise, and even when dormant.
 	var s Snapshot
 	s.AutoMode = true
-	e := New(fakeProv{s: s}, lamp.New("127.0.0.1", 1), time.UTC, time.Minute)
+	lp := &fakeLamp{}
+	e := New(fakeProv{s: s}, lp, time.UTC, time.Minute)
 	e.SetOverride(&Override{Channels: [Channels]int{5, 4, 3, 2, 1, 0}, Source: "maintenance", Until: time.Now().Add(time.Hour)})
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	_ = ctx
 	e.step()
 	st := e.Status()
 	if st.Source != "maintenance" || st.Target != [Channels]int{5, 4, 3, 2, 1, 0} {
 		t.Errorf("status after override step = %+v", st)
+	}
+	if lp.count() == 0 {
+		t.Error("override step must write to the lamp even when not live")
+	}
+}
+
+func TestStepDormantWhenNotLive(t *testing.T) {
+	lp := &fakeLamp{}
+	e := New(fakeProv{s: constSnap(40)}, lp, time.UTC, time.Minute)
+	e.step() // not live, no override
+	st := e.Status()
+	want := [Channels]int{40, 40, 40, 40, 40, 40}
+	if st.Target != want {
+		t.Fatalf("target = %v want %v", st.Target, want)
+	}
+	if lp.count() != 0 {
+		t.Errorf("dormant engine must not write to the lamp, wrote %d times", lp.count())
+	}
+	if st.Sent != want {
+		t.Errorf("dormant status should mirror Sent=Target (lamp runs its own schedule), got Sent=%v", st.Sent)
+	}
+	if n, _ := e.WritesToday(); n != 0 {
+		t.Errorf("dormant step counted %d writes, want 0", n)
+	}
+}
+
+func TestStepDrivesWhenLive(t *testing.T) {
+	lp := &fakeLamp{}
+	e := New(fakeProv{s: constSnap(40)}, lp, time.UTC, time.Minute)
+	e.SetLive(true)
+	e.step()
+	if lp.count() == 0 {
+		t.Fatal("live engine must write to the lamp")
+	}
+	if n, _ := e.WritesToday(); n != 1 {
+		t.Errorf("live step counted %d writes, want 1", n)
+	}
+	e.step() // unchanged output -> no second write
+	if lp.count() != 1 {
+		t.Errorf("live engine wrote again with no change, count=%d", lp.count())
+	}
+}
+
+func TestOverrideEndReArmsScheduleWhenDormant(t *testing.T) {
+	lp := &fakeLamp{}
+	e := New(fakeProv{s: constSnap(30)}, lp, time.UTC, time.Minute)
+	var reArmed int
+	e.SetRepushFn(func() error { reArmed++; return nil })
+
+	e.SetOverride(&Override{Channels: [Channels]int{9, 9, 9, 9, 9, 9}, Source: "feed", Until: time.Now().Add(time.Hour)})
+	e.step() // override active
+	if reArmed != 0 {
+		t.Fatal("re-arm fired while override still active")
+	}
+	e.SetOverride(&Override{Source: "feed", Until: time.Now().Add(-time.Minute)}) // expired
+	e.step()                                                                      // override just ended
+	if reArmed != 1 {
+		t.Errorf("expected schedule re-arm once after override ended, got %d", reArmed)
+	}
+	e.step() // steady dormant
+	if reArmed != 1 {
+		t.Errorf("re-arm should fire only on the transition, got %d", reArmed)
 	}
 }

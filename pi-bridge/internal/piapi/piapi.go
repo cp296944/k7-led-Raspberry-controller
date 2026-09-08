@@ -9,8 +9,11 @@
 package piapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"os/exec"
 	"regexp"
@@ -97,8 +100,19 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/api/seasonal/status":
 		h.seasonalStatus(w, r)
 
-	case "/api/push", "/api/master":
-		// let the vendored handler persist it, then recompute immediately
+	case "/api/push":
+		// Smooth ramp off → the engine won't be live-driving, so fold every
+		// time-varying effect (acclimation, seasonal, tracked lunar, siesta,
+		// master) into the 24 rows now, as a snapshot for today, before the
+		// vendored handler sends the 0x1007 schedule the lamp will run itself.
+		if r.Method == http.MethodPost {
+			h.prebakePush(r)
+		}
+		h.Next.ServeHTTP(w, r)
+		if r.Method == http.MethodPost && h.Engine != nil {
+			h.Engine.Kick()
+		}
+	case "/api/master":
 		h.Next.ServeHTTP(w, r)
 		if r.Method == http.MethodPost && h.Engine != nil {
 			h.Engine.Kick()
@@ -110,6 +124,97 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // FX exposes the effects store so the Provider can read acclimation/seasonal.
 func (h *handler) FX() *EffectsStore { return h.fx }
+
+// prebakePush, when smooth ramp is off, folds every time-varying effect into the
+// 24 rows of a POST /api/push body so the lamp can run the schedule itself. It
+// reuses the engine's own Compute() hour-by-hour, so the baked schedule matches
+// exactly what the live engine would have driven. Adds "prebaked":true so the
+// vendored handler sends the rows verbatim instead of baking a second time.
+//
+// No-op (leaves the body untouched) when: ramp is on, the request isn't an auto
+// push, the body doesn't parse, or the engine/deps are missing.
+func (h *handler) prebakePush(r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	_ = r.Body.Close()
+	restore := func() { r.Body = io.NopCloser(bytes.NewReader(body)); r.ContentLength = int64(len(body)) }
+	if err != nil {
+		restore()
+		return
+	}
+	restore()
+
+	h.fx.mu.Lock()
+	rampOn := h.fx.Ramp.Active
+	h.fx.mu.Unlock()
+	if rampOn || h.API == nil {
+		return
+	}
+
+	var m map[string]json.RawMessage
+	if json.Unmarshal(body, &m) != nil {
+		return
+	}
+	var rows [][]int
+	if raw, ok := m["schedule"]; !ok || json.Unmarshal(raw, &rows) != nil || len(rows) != engine.Slots {
+		return
+	}
+	var mode string
+	if raw, ok := m["mode"]; ok {
+		_ = json.Unmarshal(raw, &mode)
+	}
+	if mode == "manual" {
+		return // manual push: no schedule effects to bake
+	}
+	var manual [engine.Channels]int
+	if raw, ok := m["manual"]; ok {
+		var mm []int
+		if json.Unmarshal(raw, &mm) == nil {
+			for i := 0; i < engine.Channels && i < len(mm); i++ {
+				manual[i] = mm[i]
+			}
+		}
+	}
+
+	tz := h.TZ
+	if tz == nil {
+		tz = time.Local
+	}
+	cfg := NewProvider(h.API, h.fx, tz).EngineSnapshot().Config
+	cfg.ScheduleShiftMinutes = 0 // piweb already rotated the rows
+
+	base := scheduleFromRows(rows)
+	day := time.Now().In(tz)
+	baked := make([][]int, engine.Slots)
+	for hh := 0; hh < engine.Slots; hh++ {
+		at := time.Date(day.Year(), day.Month(), day.Day(), hh, 0, 0, 0, tz)
+		out := cfg.Compute(base, manual, true, at)
+		row := []int{hh, 0, 0, 0, 0, 0, 0, 0}
+		for c := 0; c < engine.Channels; c++ {
+			row[2+c] = out.Channels[c]
+		}
+		baked[hh] = row
+	}
+	if nb, err := json.Marshal(baked); err == nil {
+		m["schedule"] = nb
+	}
+	m["prebaked"] = json.RawMessage("true")
+	if nb, err := json.Marshal(m); err == nil {
+		r.Body = io.NopCloser(bytes.NewReader(nb))
+		r.ContentLength = int64(len(nb))
+		slog.Debug("piapi: pre-baked push schedule (smooth ramp off)")
+	}
+}
+
+// scheduleFromRows converts a 24×8 [][]int body schedule to engine.Schedule.
+func scheduleFromRows(rows [][]int) engine.Schedule {
+	var s engine.Schedule
+	for i := 0; i < engine.Slots && i < len(rows); i++ {
+		for j := 0; j < 8 && j < len(rows[i]); j++ {
+			s[i][j] = rows[i][j]
+		}
+	}
+	return s
+}
 
 // Provider implements engine.Provider by combining httpapi's stored working
 // state with pi-bridge's own effect configs (acclimation, seasonal). Standalone
@@ -198,9 +303,36 @@ func (h *handler) time(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type writesToday struct {
+	Auto   int    `json:"auto"`
+	Manual int    `json:"manual"`
+	Date   string `json:"date"`
+}
+
+type outputStatusResp struct {
+	engine.OutputStatus
+	Live        bool        `json:"live"`         // is the engine the live driver? (smooth ramp on)
+	WritesToday writesToday `json:"writes_today"` // lamp writes since local midnight
+}
+
 func (h *handler) outputStatus(w http.ResponseWriter, r *http.Request) {
-	st := h.Engine.Status()
-	writeJSON(w, http.StatusOK, st)
+	auto, day := h.Engine.WritesToday()
+	manual := 0
+	if h.API != nil {
+		m, mday := h.API.ManualWritesToday()
+		manual = m
+		if day == "" {
+			day = mday
+		}
+	}
+	if day == "" {
+		day = time.Now().Format("2006-01-02")
+	}
+	writeJSON(w, http.StatusOK, outputStatusResp{
+		OutputStatus: h.Engine.Status(),
+		Live:         h.Engine.Live(),
+		WritesToday:  writesToday{Auto: auto, Manual: manual, Date: day},
+	})
 }
 
 func (h *handler) logs(w http.ResponseWriter, r *http.Request) {
