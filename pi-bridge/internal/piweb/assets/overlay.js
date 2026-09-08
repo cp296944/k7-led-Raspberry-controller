@@ -109,6 +109,70 @@
       'padding:3px 8px;cursor:pointer;font:inherit';
   }
 
+  // ---- explicit-apply: nothing reaches the lamp until the user hits Push ----
+  // Upstream auto-pushes to the lamp on every master-slider / shift change.
+  // We neuter that: staged changes stay local (chart + pi-bridge store) and are
+  // only sent to the lamp by the explicit "Push" / "Apply" button.
+  function curMaster() {
+    var s = document.getElementById('masterSlider');
+    return s ? parseInt(s.value, 10) || 100 : 100;
+  }
+  function setDirty(on) {
+    var pb = document.getElementById('pushBtn');
+    if (!pb) return;
+    pb.classList.toggle('k7pi-dirty', !!on);
+    if (on && !pb.dataset.k7piBase) pb.dataset.k7piBase = pb.textContent;
+    if (pb.dataset.k7piBase) pb.textContent = on ? '● ' + pb.dataset.k7piBase : pb.dataset.k7piBase;
+  }
+  function installExplicitApply() {
+    if (installExplicitApply.done || !window.api) return;
+    // once per session hint
+    var hinted = sessionStorage.getItem('k7pi-hinted');
+
+    if (typeof window._autoPushMaster === 'function') {
+      window._autoPushMaster = async function () {
+        setDirty(true);
+        if (!hinted) {
+          toast(dict['Changes staged — press Push to send to the lamp'] ||
+                '改動已暫存,按「⬆ Push」才會送到燈');
+          sessionStorage.setItem('k7pi-hinted', '1');
+          hinted = '1';
+        }
+      };
+    }
+    ['pushSchedule', 'saveManual'].forEach(function (fn) {
+      var orig = window[fn];
+      if (typeof orig !== 'function') return;
+      window[fn] = async function () {
+        try { await window.api('POST', '/api/master', { value: curMaster() }); } catch (e) {}
+        var r = await orig.apply(this, arguments);
+        setDirty(false);
+        return r;
+      };
+    });
+    if (typeof window.onModeToggle === 'function') {
+      var om = window.onModeToggle;
+      window.onModeToggle = function () { var r = om.apply(this, arguments); setDirty(true); return r; };
+    }
+    var style = document.createElement('style');
+    style.textContent =
+      '.k7pi-dirty{outline:2px solid #e0a53a !important;outline-offset:1px;animation:k7pipulse 1.6s ease-in-out infinite}' +
+      '@keyframes k7pipulse{50%{outline-color:#f4c96b}}' +
+      '.k7pi-toast{position:fixed;left:50%;bottom:64px;transform:translateX(-50%);z-index:99999;' +
+      'background:#2a2e38;color:#fff;border:1px solid #4a4f5c;border-radius:8px;padding:8px 14px;' +
+      'font:13px/1.4 system-ui,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.4);max-width:80vw}';
+    document.head.appendChild(style);
+    installExplicitApply.done = true;
+  }
+  function toast(msg) {
+    var d = document.createElement('div');
+    d.className = 'k7pi-toast';
+    d.textContent = msg;
+    document.body.appendChild(d);
+    setTimeout(function () { d.style.opacity = '0'; d.style.transition = 'opacity .4s'; }, 3500);
+    setTimeout(function () { d.remove(); }, 4000);
+  }
+
   // ---- boot ---------------------------------------------------------------
   fetch('/pi/dict-zh-Hant.json')
     .then(function (r) { return r.json(); })
@@ -118,6 +182,13 @@
       var start = function () {
         retranslateAll();
         mountBar();
+        installExplicitApply();
+        // the page's own script may define api() slightly after us
+        var tries = 0;
+        var iv = setInterval(function () {
+          installExplicitApply();
+          if (installExplicitApply.done || ++tries > 40) clearInterval(iv);
+        }, 250);
         new MutationObserver(function (muts) {
           muts.forEach(function (m) {
             m.addedNodes && m.addedNodes.forEach(function (n) { translateNode(n); });
