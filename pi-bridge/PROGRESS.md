@@ -170,7 +170,28 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 
 ---
 
-## Current state (2026-09-08 — pi-v0.9.9 in progress)
+## Current state (2026-09-08 — pi-v0.9.9 merged)
+
+**PR #11 merged. origin/master == origin/dev/pi-bridge == 929312e. Release
+`pi-v0.9.9` published. User applies the OTA from the UI (confirmation dialog).**
+
+Session recap — this run shipped pi-v0.9.6 … pi-v0.9.9:
+- 0.9.6: dead Read buttons, missing 光譜數值表 (`window.chart` is let-scoped →
+  `Chart.getChart`), README "diverges from upstream" section + hard-rule,
+  arm64-only decision.
+- 0.9.7: Smooth Ramp = the live-driver switch (engine dormant when off; lamp
+  runs its own 0x1007 schedule), Push pre-bakes today's effect snapshot when
+  ramp off, value table always-open, top-bar 今日上傳次數 counter.
+- 0.9.8: `/api/update/apply` needs `{confirm:true,tag:...}` + overlay confirm
+  dialog (user saw "auto-updated" — journal proved the loop honoured
+  auto_update:false; it was POSTs to the endpoint), hourly chart gridlines
+  (draw plugin, NOT options mutation → that recurses Chart.js v4), value-table
+  column alignment, fixed a `_sync`↔`buildGrid` infinite recursion that broke
+  the table on some loads, `/api/warnings/status` stub (200 empty).
+- 0.9.9: Shift ◀▶ rotates the real Base schedule in place (stays on Base, no
+  double-shift); value-table ±1h/±1% kept per user.
+
+### pi-v0.9.9 — Shift now moves the Base schedule for real
 
 ### pi-v0.9.9 — Shift now moves the Base schedule for real
 User: "BASE 的 SHIFT 是壞的,每次按 SHIFT 他就自動跳到 Effective Today".
