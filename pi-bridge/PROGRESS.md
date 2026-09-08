@@ -170,7 +170,19 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 
 ---
 
-## Current state (2026-09-08 — pi-v1.0.1 in progress)
+## Current state (2026-09-08 — pi-v1.0.1 merged)
+
+**PR #14 merged. origin/master == origin/dev/pi-bridge == c68b176. Release
+`pi-v1.0.1` published. 18/18.** This session: pi-v0.9.6 → pi-v1.0.1 (8 feature
+releases + PROGRESS commits).
+
+### NEXT
+- **7-day soak** — user relocates the Pi near the tank, updates to pi-v1.0.1,
+  runs it a week. Review afterwards: `curl <pi>/api/diag` or
+  `cat /opt/k7-pi-bridge/data/soak.log` — watch `rss_kb` (leak), `w_auto`
+  (hammering), `lamp_fails`/`lamp_consec_fail` (reconnect health).
+- **Phase 5 = Home Assistant** (`pi-v1.1`): `/api/ha/*` REST + `custom_components/
+  k7_lamp/` → `D:\HomeAssistant\custom_components\`. DESIGN.md §7 has the shapes.
 
 ### pi-v1.0.1 — write-counter persistence + soak monitor + update-apply fix
 Three things, all from user reports / the soak plan:
