@@ -17,14 +17,14 @@ import (
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/updater"
 )
 
-// A bare POST /api/update/apply (stray click, replay, script) must be rejected —
-// applying restarts the service, so it needs {"confirm":true,"tag":...}.
+// A POST /api/update/apply without {"confirm":true} (stray click, replay,
+// script) must be rejected — applying restarts the service.
 func TestUpdateApplyNeedsConfirmation(t *testing.T) {
 	up := updater.New(updater.Options{Repo: "cp296944/x", CurrentTag: "dev"})
 	var auto atomic.Bool
-	h := routes(config.Config{}, "", up, &auto, nil, http.NotFoundHandler())
+	h := routes(config.Config{}, "", up, &auto, http.NotFoundHandler())
 
-	for _, body := range []string{"", "{}", `{"confirm":true}`, `{"tag":"pi-v9.9.9"}`} {
+	for _, body := range []string{"", "{}", `{"confirm":false}`, `{"tag":"pi-v9.9.9"}`} {
 		rr := httptest.NewRecorder()
 		h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/update/apply", strings.NewReader(body)))
 		if rr.Code != http.StatusBadRequest {
@@ -55,7 +55,7 @@ func newSetupTestRoutes(t *testing.T) (http.Handler, string) {
 		autoUpdate: &auto, api: api, lamp: lamp.New("127.0.0.1", 1), started: time.Now(),
 	}
 	up := updater.New(updater.Options{Repo: "cp296944/x", CurrentTag: "dev"})
-	return routes(cfg, cfgPath, up, &auto, su, http.NotFoundHandler()), cfgPath
+	return routes(cfg, cfgPath, up, &auto, http.NotFoundHandler(), su.register), cfgPath
 }
 
 func TestSetupGetAndPost(t *testing.T) {

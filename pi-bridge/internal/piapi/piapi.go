@@ -26,6 +26,7 @@ import (
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/httpapi"
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/lamp"
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/ringlog"
+	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/tally"
 )
 
 type Deps struct {
@@ -38,6 +39,7 @@ type Deps struct {
 	WlanIf  string        // e.g. "wlan0"
 	DataDir string        // fallback if FX is nil
 	FX      *EffectsStore // share the same store the Provider uses
+	Tally   *tally.Counter // shared lamp-write counter for /api/output/status
 }
 
 type handler struct {
@@ -319,14 +321,10 @@ type outputStatusResp struct {
 }
 
 func (h *handler) outputStatus(w http.ResponseWriter, r *http.Request) {
-	auto, day := h.Engine.WritesToday()
-	manual := 0
-	if h.API != nil {
-		m, mday := h.API.ManualWritesToday()
-		manual = m
-		if day == "" {
-			day = mday
-		}
+	var auto, manual int
+	var day string
+	if h.Tally != nil {
+		auto, manual, day = h.Tally.Today()
 	}
 	if day == "" {
 		day = time.Now().Format("2006-01-02")

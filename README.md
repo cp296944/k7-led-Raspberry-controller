@@ -136,8 +136,14 @@ scripts are **byte-for-byte upstream**. `git diff upstream/master -- pc-bridge s
   onboarding portal has no shared-UI panel; this is pi-bridge's equivalent.
   With it, **all 18 capability flags are `true` — full 1:1 with the ESP32.**
 - **Today's lamp-write counter** in the top bar — `auto` (engine) vs `manual`
-  (your Push / Preview), reset at local midnight, so you can see how much the
-  Pi is talking to the lamp.
+  (your Push / Preview), reset at local midnight and **persisted to
+  `data/writes.json`** so a restart or a mid-day OTA doesn't zero it.
+- **Soak endpoint** — `GET /api/diag` returns a live snapshot (RSS, heap,
+  goroutines, GC, lamp-op health, today's writes) plus the tail of an hourly
+  `data/soak.log`, for reviewing a multi-day unattended run.
+- **Applying an update needs only `{confirm:true}`** — `tag` is advisory; if a
+  newer release appeared since the page loaded, that newer one is installed and
+  the response names it.
 - All 18 capability flags are advertised `true`, so the shared UI shows every
   control (upstream `pc-bridge` hides 9).
 

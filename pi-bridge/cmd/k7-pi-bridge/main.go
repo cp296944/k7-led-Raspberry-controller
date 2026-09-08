@@ -31,6 +31,7 @@ import (
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/profiles"
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/proxy"
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/ringlog"
+	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/tally"
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/updater"
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/version"
 )
@@ -105,6 +106,12 @@ func run(args []string) error {
 	lampConn := lamp.New(cfg.LampHost, cfg.LampPort)
 	fx := piapi.NewEffectsStore(cfg.DataDir)
 
+	// Shared lamp-write counter (今日上傳次數). Persists across restart / OTA so
+	// a mid-day update doesn't zero it.
+	writeTally := tally.Load(filepath.Join(cfg.DataDir, "writes.json"), tz)
+	go writeTally.Run(ctx, 5*time.Minute)
+	defer func() { _ = writeTally.Save() }()
+
 	api, err := httpapi.New(httpapi.Options{
 		ConfigPath:   filepath.Join(cfg.DataDir, "store.json"),
 		Version:      version.Version,
@@ -114,6 +121,7 @@ func run(args []string) error {
 		LampPort:     cfg.LampPort,
 		LampGate:     lampConn.Gate(),
 		Capabilities: caps,
+		Tally:        writeTally,
 	})
 	if err != nil {
 		return fmt.Errorf("http api: %w", err)
@@ -123,6 +131,7 @@ func run(args []string) error {
 	// When the engine stops live-driving (smooth ramp off) or a timed override
 	// ends, hand the lamp back its own 0x1007 schedule.
 	eng.SetRepushFn(api.Republish)
+	eng.SetTally(writeTally)
 	// Persisted smooth-ramp state decides whether the engine drives live; piapi
 	// re-asserts this in Wrap(), this just avoids a momentary wrong mode on boot.
 	eng.SetLive(fx.Ramp.Active)
@@ -144,20 +153,27 @@ func run(args []string) error {
 			TZ:      tz,
 			DataDir: cfg.DataDir,
 			FX:      fx,
+			Tally:   writeTally,
 		}),
 		Profiles:   profStore,
 		Version:    version.Version,
 		UpdateRepo: cfg.UpdateRepo,
 	})
 
+	started := time.Now()
 	setup := &setupAPI{
 		cfg: cfg, cfgPath: cfgPath, dataDir: cfg.DataDir,
-		autoUpdate: &autoUpdate, api: api, lamp: lampConn, started: time.Now(),
+		autoUpdate: &autoUpdate, api: api, lamp: lampConn, started: started,
 	}
+	diag := &diagAPI{
+		dataDir: cfg.DataDir, started: started,
+		eng: eng, lamp: lampConn, tally: writeTally, version: version.Version,
+	}
+	go diag.run(ctx, time.Hour)
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           routes(cfg, cfgPath, up, &autoUpdate, setup, uiHandler),
+		Handler:           routes(cfg, cfgPath, up, &autoUpdate, uiHandler, setup.register, diag.register),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -194,7 +210,7 @@ func run(args []string) error {
 	return srv.Shutdown(shutCtx)
 }
 
-func routes(cfg config.Config, cfgPath string, up *updater.Updater, autoUpdate *atomic.Bool, setup *setupAPI, ui http.Handler) http.Handler {
+func routes(cfg config.Config, cfgPath string, up *updater.Updater, autoUpdate *atomic.Bool, ui http.Handler, extra ...func(*http.ServeMux)) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -202,8 +218,10 @@ func routes(cfg config.Config, cfgPath string, up *updater.Updater, autoUpdate *
 		fmt.Fprintln(w, "ok")
 	})
 
-	if setup != nil {
-		setup.register(mux)
+	for _, reg := range extra {
+		if reg != nil {
+			reg(mux)
+		}
 	}
 
 	mux.HandleFunc("GET /api/update/status", func(w http.ResponseWriter, r *http.Request) {
@@ -300,17 +318,21 @@ func routes(cfg config.Config, cfgPath string, up *updater.Updater, autoUpdate *
 
 	mux.HandleFunc("POST /api/update/apply", func(w http.ResponseWriter, r *http.Request) {
 		// Applying restarts the service and swaps the running binary, so it must
-		// be a deliberate act: require {"confirm": true} in the body AND that the
-		// caller name the exact target tag it means to install. A bare POST
-		// (stray click, replayed request, misbehaving script) is rejected.
+		// be a deliberate act: require {"confirm": true}. A bare POST (stray
+		// click, replayed request, misbehaving script) is rejected.
+		//
+		// "tag" is an advisory hint of what the caller saw as available. If a
+		// newer release has landed since, we apply that newer one (the intent is
+		// "update"); the response's "applying" says what actually got installed
+		// so the client polls for the right version.
 		var in struct {
 			Confirm bool   `json:"confirm"`
 			Tag     string `json:"tag"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&in)
-		if !in.Confirm || in.Tag == "" {
+		if !in.Confirm {
 			writeJSON(w, http.StatusBadRequest, map[string]any{
-				"error": `update apply needs {"confirm": true, "tag": "<target>"} — use the "Update now" button`,
+				"error": `update apply needs {"confirm": true} — use the "Update now" button`,
 			})
 			return
 		}
@@ -324,15 +346,9 @@ func routes(cfg config.Config, cfgPath string, up *updater.Updater, autoUpdate *
 			writeJSON(w, http.StatusOK, map[string]any{"applied": false, "reason": "up to date"})
 			return
 		}
-		if in.Tag != rel.Tag {
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"error": fmt.Sprintf("available update is %s, not the requested %s", rel.Tag, in.Tag),
-			})
-			return
-		}
-		slog.Info("update apply requested via API", "tag", rel.Tag, "remote", r.RemoteAddr)
+		slog.Info("update apply requested via API", "tag", rel.Tag, "requested", in.Tag, "remote", r.RemoteAddr)
 		// Respond before the restart cuts the connection.
-		writeJSON(w, http.StatusAccepted, map[string]any{"applying": rel.Tag})
+		writeJSON(w, http.StatusAccepted, map[string]any{"applying": rel.Tag, "requested": in.Tag})
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
