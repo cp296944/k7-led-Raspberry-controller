@@ -126,6 +126,10 @@ scripts are **byte-for-byte upstream**. `git diff upstream/master -- pc-bridge s
   aligned with the header.
 - **Hourly gridlines** on the schedule chart (upstream rules only every 4h,
   where its labels are) — easier to read a time off the curve.
+- **"Checks" panel is live** — `/api/warnings/status` reports real conditions
+  (clock not set, lamp unreachable, weak Wi-Fi to the lamp, an all-zero schedule
+  that would leave the tank dark, a failed write). Upstream `pc-bridge` never
+  implemented the endpoint, so the panel was always empty.
 - **Today's lamp-write counter** in the top bar — `auto` (engine) vs `manual`
   (your Push / Preview), reset at local midnight, so you can see how much the
   Pi is talking to the lamp.

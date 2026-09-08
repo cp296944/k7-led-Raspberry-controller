@@ -134,7 +134,7 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 
 ### Phase 4 — Setup page + hardening  (tag `pi-v1.0`)
 - [ ] `setup_portal` equivalent (lamp SSID/IP settings page, wifi status, factory reset)
-- [ ] `/api/warnings/status`, diagnostics page
+- [~] `/api/warnings/status` — real feed done (pi-v0.9.10); diagnostics *page* still TODO
 - [ ] 7-day soak on the Pi
 - [ ] `pi-bridge/README.md` + top-level `README.md` rewrite (user asked: explain the project for others)
 - [ ] optional: PR `pi-bridge/` back to bitbarista
@@ -170,7 +170,48 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 
 ---
 
-## Current state (2026-09-08 — pi-v0.9.9 in progress)
+## Current state (2026-09-08 — pi-v0.9.10 in progress)
+
+### pi-v0.9.10 — "檢查" (Checks) panel is now a real warnings feed
+User asked what the empty "檢查" card at the bottom does. It's the shared UI's
+`#warningsList`, fed by `GET /api/warnings/status` (`{items:[{level,message}]}`);
+upstream pc-bridge never implemented it and 0.9.8's stub used the wrong key
+(`warnings` not `items`), so it was always empty.
+
+`piapi.warnings` now reports live conditions:
+- clock not set (`engine.ClockSane()`) — error
+- lamp never contacted / last contact failed (`lamp.Health()`) — warn
+- Wi-Fi to the lamp < 35% (`iw dev <wlan> link`) — warn
+- **schedule all-zero while in auto mode** (would leave the tank dark) — warn
+  (this is exactly the confusion the user hit earlier)
+- last engine write to the lamp failed — warn
+
+`piapi_test.go` covers the dark-schedule + no-lamp-contact cases. This partly
+does Phase 4's "`/api/warnings/status` real warnings feed"; a diagnostics *page*
+(vs this inline panel) is still Phase 4.
+
+## Current state (2026-09-08 — pi-v0.9.9 merged)
+
+**PR #11 merged. origin/master == origin/dev/pi-bridge == 929312e. Release
+`pi-v0.9.9` published. User applies the OTA from the UI (confirmation dialog).**
+
+Session recap — this run shipped pi-v0.9.6 … pi-v0.9.9:
+- 0.9.6: dead Read buttons, missing 光譜數值表 (`window.chart` is let-scoped →
+  `Chart.getChart`), README "diverges from upstream" section + hard-rule,
+  arm64-only decision.
+- 0.9.7: Smooth Ramp = the live-driver switch (engine dormant when off; lamp
+  runs its own 0x1007 schedule), Push pre-bakes today's effect snapshot when
+  ramp off, value table always-open, top-bar 今日上傳次數 counter.
+- 0.9.8: `/api/update/apply` needs `{confirm:true,tag:...}` + overlay confirm
+  dialog (user saw "auto-updated" — journal proved the loop honoured
+  auto_update:false; it was POSTs to the endpoint), hourly chart gridlines
+  (draw plugin, NOT options mutation → that recurses Chart.js v4), value-table
+  column alignment, fixed a `_sync`↔`buildGrid` infinite recursion that broke
+  the table on some loads, `/api/warnings/status` stub (200 empty).
+- 0.9.9: Shift ◀▶ rotates the real Base schedule in place (stays on Base, no
+  double-shift); value-table ±1h/±1% kept per user.
+
+### pi-v0.9.9 — Shift now moves the Base schedule for real
 
 ### pi-v0.9.9 — Shift now moves the Base schedule for real
 User: "BASE 的 SHIFT 是壞的,每次按 SHIFT 他就自動跳到 Effective Today".
