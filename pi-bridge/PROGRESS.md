@@ -25,6 +25,12 @@ blocker under "BLOCKED" and stop.**
   `tools/` except NEW files) so `git merge upstream/master` stays clean.
 - The shared UI is capability-driven: "1:1" = all 18 capability flags `true`
   and their endpoints implemented. See PLAN.md §0 for the ledger.
+- **Every change that diverges from upstream bitbarista (a modified upstream
+  file, a new user-visible behaviour, a platform-scope decision) MUST be added
+  to the "Exactly what diverges from upstream" section of the top-level
+  `README.md` in the same commit.**
+- Ship target is **`linux/arm64` only** (all 64-bit Pis). 32-bit Pi models are
+  explicitly out of scope (user decision 2026-09-08). Do not add GOARM builds.
 
 ## Key facts already established
 
@@ -165,8 +171,33 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 ---
 
 ## Current state (2026-09-08 — end of session)
-- **All merged to master through PR #6** (pi-v0.9.5). Pi is running `pi-v0.9.5`.
-- **Capabilities: 17 / 18** — only `setup_portal` left (Phase 4). origin/master == origin/dev/pi-bridge == 42f4267 (clean).
+- **All merged to master through PR #7** (pi-v0.9.5 + PROGRESS). origin/master ==
+  origin/dev/pi-bridge == 079ef0b was the baseline for this session.
+- **pi-v0.9.6 in progress on `dev/pi-bridge`** — three user-reported fixes:
+  1. **Read buttons were no-ops on the Pi.** Root cause: upstream
+     `readControllerState()` only does a live `/api/lamp/read` when platform is
+     `pc_bridge`; on `pi_bridge` it just reloads the local `/api/state` cache.
+     Fix: `overlay.js` wraps `window.readFromDevice` to `GET /api/lamp/read`
+     first (Option A, user-chosen — matches pc-bridge Read, overwrites unsaved
+     chart edits). Both Read buttons + the value-table "從裝置讀取" go through it.
+  2. **光譜數值表 never appeared (pi-v0.9.5 regression).** The 0.9.5 rework read
+     `window.chart`, but upstream declares `chart` with `let` in a classic
+     `<script>` → not a window property → `mountValueTable()`'s guard always
+     bailed. Fix: `liveChart()` helper resolves via `Chart.getChart('schedChart')`
+     (Chart.js v4 registry). Header given a surface bg for discoverability.
+  3. README: new **"Exactly what diverges from upstream"** section (full
+     file-level + behaviour-level list) + a Hard-rule to keep it current.
+- Diagnostic finding (NOT changed — user will drive the UI himself): the Pi's
+  `②/api/state.schedule` is all-zeros and so is the lamp's stored native
+  schedule, so the engine is holding output at `[0,0,0,0,0,0]`. The user's real
+  evening curve lives only in the browser profile `saved:K7_Pro42113`; the
+  engine reads `state.Schedule`, never a profile. User will apply the profile +
+  Push from the UI to repopulate both ② and ①.
+- Engine behaviour clarified for the user: the tick loop runs 24/7 regardless of
+  Smooth Ramp; ramp only sets cadence (5min off / 1min on); `step()` sends
+  `lamp.Hand()` (0x1005 live) only when the computed output changes vs
+  `e.lastSent`. Native `0x1007` schedule (via Push) is the Pi-down fallback only.
+- **Capabilities: 17 / 18** — only `setup_portal` left (Phase 4).
 - The always-on engine drives the real K7 Pro 24/7: schedule interpolation,
   smooth-ramp cadence, feed/maintenance timed overrides, tracked lunar,
   acclimation, seasonal shift. Feed was verified changing the physical lamp.
@@ -177,6 +208,21 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
   diff vs upstream. **D (golden-vs-ESP32) DROPPED** per user.
 - Working dir: `D:\HomeAssistant\K7\K7_Pi_Wifi_Controller`; ESP32 flash scripts
   in `..\esp32-flash-experiment\`. Scheduled resume task: OFF (user disabled).
+
+### NEXT (this session): finish pi-v0.9.6
+- build/vet/test/arm64 all green ✅ (done)
+- commit + push `dev/pi-bridge`, tag `pi-v0.9.6`, wait CI
+- deploy to Pi **scratch port :19999** (K7_DATA_DIR=/tmp/xxx --proxy ""), do NOT
+  OTA the running :80 service — show the user, he applies the update himself
+- verify: both Read buttons trigger a lamp readAll; 光譜數值表 appears under the
+  chart in Auto mode and is live-linked
+- gh pr create → CI green → merge → sync dev
+
+### Open feature request (queued, not started)
+- **引擎託管 / 燈自主 切換**: a UI switch for "Pi drives the lamp live (0x1005)"
+  vs "push the 24-slot schedule once and let the lamp run itself, engine idle".
+  Today the architecture is always Pi-as-brain. User asked whether this is
+  wanted — pending his answer.
 
 ### NEXT (when the user says go): Phase 4 = `pi-v1.0.0` → 18/18
 - `setup_portal` cap + a settings page: lamp host/port, wifi status, factory
@@ -228,6 +274,10 @@ _(none)_
 ## Session log
 - 2026-09-07/08 — Phase 0 done (scaffold, vendored k7tcp, config, version,
   API.md, parity tooling).
+- 2026-09-08 (later) — **pi-v0.9.6**: fixed dead Read buttons (overlay wraps
+  readFromDevice → /api/lamp/read), fixed missing 光譜數值表 (window.chart is
+  let-scoped → use Chart.getChart), README divergence section + Hard-rule.
+  User will apply the OTA + repopulate the schedule via the UI himself.
 - 2026-09-08 — **Phase 1 done.** updater + CI + deploy scripts. Deployed to Pi.
   OTA self-update AND rollback both verified on real hardware end-to-end.
   Pi running pi-v0.2.0. Next: **Phase 2** — vendor+adapt the pc-bridge HTTP

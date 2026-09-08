@@ -255,6 +255,24 @@
       };
       window.chartEffectiveValueAtMins._k7pi = true;
     }
+    // ── Read fix ──────────────────────────────────────────────────────────
+    // Upstream's readFromDevice() only does a live lamp readAll (0x1008) when
+    // the platform is pc_bridge; on pi-bridge it just reloads the local
+    // /api/state cache, so the two Read buttons never show what the lamp
+    // actually has stored. Prepend a real /api/lamp/read so Read means "pull
+    // the schedule from the lamp" here too. (Same behaviour as pc-bridge Read:
+    // it overwrites unsaved chart edits — that is expected.)
+    if (typeof window.readFromDevice === 'function' && !window.readFromDevice._k7pi) {
+      var oRead = window.readFromDevice;
+      window.readFromDevice = async function () {
+        try {
+          if (typeof window.setBusy === 'function') window.setBusy(dict['Reading from lamp…'] || 'Reading from lamp…');
+          await window.api('GET', '/api/lamp/read');
+        } catch (e) { /* fall through — oRead surfaces the error via /api/state */ }
+        return oRead.apply(this, arguments);
+      };
+      window.readFromDevice._k7pi = true;
+    }
     if (typeof window.changeShift === 'function' && !window.changeShift._k7pi) {
       var ocs = window.changeShift;
       window.changeShift = function () {
@@ -317,8 +335,17 @@
   // authoritative for Push.
   var GRID_TITLE = function () { return dict['Spectrum value table'] || '光譜數值表'; };
 
+  // Upstream declares `chart` with `let` inside a classic <script>, so it is
+  // NOT a property of window. Reach the live instance through Chart.js's own
+  // registry instead (canvas id = schedChart, Chart.js v4).
+  function liveChart() {
+    if (window.chart) return window.chart;
+    try { return (window.Chart && window.Chart.getChart && window.Chart.getChart('schedChart')) || null; }
+    catch (e) { return null; }
+  }
+
   function chartCols() {
-    var c = window.chart;
+    var c = liveChart();
     if (!c || !c.data || !c.data.datasets) return [];
     var seen = {}, out = [];
     c.data.datasets.forEach(function (ds, i) {
@@ -331,11 +358,11 @@
     return out;
   }
   function gridCellVal(dsIndex, h) {
-    try { return Math.round(window.chart.data.datasets[dsIndex].data[h] || 0); } catch (e) { return 0; }
+    try { return Math.round(liveChart().data.datasets[dsIndex].data[h] || 0); } catch (e) { return 0; }
   }
   function gridWrite(dsIndex, h, v) {
     v = clampv(v);
-    var c = window.chart;
+    var c = liveChart();
     var cfgD = c && (c._dragDataConfig || (c.options.plugins.dragData));
     if (cfgD && typeof cfgD.onDrag === 'function') {
       // this updates schedule[] AND scheduleBase[] the way a real drag would
@@ -351,12 +378,12 @@
   function mountValueTable() {
     if (document.getElementById('k7pi-grid')) return;
     var anchor = document.getElementById('autoPanel') || document.querySelector('.chart-canvas-wrap');
-    if (!anchor || !window.chart) return;
+    if (!anchor || !liveChart()) return;
 
     var box = el('div', { id: 'k7pi-grid' });
     box.style.cssText = 'margin-top:10px;border:1px solid var(--border,#2c343d);border-radius:8px;background:var(--surface,#1c2229);overflow:hidden';
     var head = el('button', { type: 'button' });
-    head.style.cssText = 'width:100%;text-align:left;background:transparent;border:0;color:var(--text,#e7ecf1);padding:8px 12px;cursor:pointer;font:inherit;font-weight:600';
+    head.style.cssText = 'width:100%;text-align:left;background:var(--surface2,#262e37);border:0;color:var(--text,#e7ecf1);padding:9px 12px;cursor:pointer;font:inherit;font-weight:600';
     var body = el('div'); body.hidden = true; body.style.cssText = 'padding:10px 12px 14px';
     var setLabel = function () { head.textContent = GRID_TITLE() + (body.hidden ? '  ▾' : '  ▴'); };
     setLabel();
