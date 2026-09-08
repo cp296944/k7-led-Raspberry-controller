@@ -290,6 +290,22 @@ func routes(cfg config.Config, cfgPath string, up *updater.Updater, autoUpdate *
 	})
 
 	mux.HandleFunc("POST /api/update/apply", func(w http.ResponseWriter, r *http.Request) {
+		// Applying restarts the service and swaps the running binary, so it must
+		// be a deliberate act: require {"confirm": true} in the body AND that the
+		// caller name the exact target tag it means to install. A bare POST
+		// (stray click, replayed request, misbehaving script) is rejected.
+		var in struct {
+			Confirm bool   `json:"confirm"`
+			Tag     string `json:"tag"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		if !in.Confirm || in.Tag == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error": `update apply needs {"confirm": true, "tag": "<target>"} — use the "Update now" button`,
+			})
+			return
+		}
+
 		rel, err := up.Check(r.Context())
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
@@ -299,6 +315,13 @@ func routes(cfg config.Config, cfgPath string, up *updater.Updater, autoUpdate *
 			writeJSON(w, http.StatusOK, map[string]any{"applied": false, "reason": "up to date"})
 			return
 		}
+		if in.Tag != rel.Tag {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error": fmt.Sprintf("available update is %s, not the requested %s", rel.Tag, in.Tag),
+			})
+			return
+		}
+		slog.Info("update apply requested via API", "tag", rel.Tag, "remote", r.RemoteAddr)
 		// Respond before the restart cuts the connection.
 		writeJSON(w, http.StatusAccepted, map[string]any{"applying": rel.Tag})
 		if f, ok := w.(http.Flusher); ok {

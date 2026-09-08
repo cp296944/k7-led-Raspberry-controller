@@ -52,7 +52,7 @@ A Raspberry Pi has **two network interfaces**, so it sits on both at once:
 | | |
 |---|---|
 | **Always‑on engine on the Pi** | The full lighting engine (`arduino/src/Effects.cpp` ported to Go) runs as a systemd service: 24‑slot schedule interpolation, Feed / Maintenance timed overrides, Lunar (synodic + moonrise‑tracked), Siesta, Acclimation, Seasonal Shift — all the ESP32's runtime features, none of the ESP32 needed. **Smooth Ramp toggles whether the engine drives the lamp live (~10‑min cadence) or the lamp runs the pushed schedule on its own** while the engine stays dormant. |
-| **Over‑the‑air updates** | Tag a release on GitHub → the Pi verifies it (SHA‑256), swaps it in atomically, and self‑restarts, with automatic rollback if the new build won't stay healthy. A **"Check for updates"** button and an **Auto** toggle live in the top bar (Auto is **off** by default). Click the **version chip** for the full release history. |
+| **Over‑the‑air updates** | Tag a release on GitHub → the Pi verifies it (SHA‑256), swaps it in atomically, and self‑restarts, with automatic rollback if the new build won't stay healthy. A **"Check for updates"** button and an **Auto** toggle live in the top bar (Auto is **off** by default). Applying prompts for confirmation, and `POST /api/update/apply` requires `{"confirm":true,"tag":"<exact target>"}` so a bare or replayed request can't trigger an update. Click the **version chip** for the full release history. |
 | **Traditional‑Chinese UI** | A conservative overlay translates the basic UI text (Save, Read, Push, Apply, …); proper nouns are left alone. **中/EN** switch in the top bar. |
 | **Per‑lamp profile storage** | Saved profiles are keyed by the lamp's MAC (`data/profiles/<lamp>/`) — swapping or running two lamps never mixes them, and an OTA update never touches them. Existing profiles migrate automatically. |
 | **Live spectrum value table** | An always‑open grid under the chart: type an exact % per hour per channel and the chart follows live; drag the chart and the numbers follow. Plus ±1h rotate and ±1% power nudge per channel. |
@@ -120,7 +120,10 @@ scripts are **byte-for-byte upstream**. `git diff upstream/master -- pc-bridge s
   after the Push the chart re-reads so the Base view shows the rotated schedule
   and the counter resets — no accidental double-shift.
 - **Spectrum value table** sits open under the chart (not collapsed) so the
-  drag chart and the exact %-per-hour grid are visible together.
+  drag chart and the exact %-per-hour grid are visible together, columns
+  aligned with the header.
+- **Hourly gridlines** on the schedule chart (upstream rules only every 4h,
+  where its labels are) — easier to read a time off the curve.
 - **Today's lamp-write counter** in the top bar — `auto` (engine) vs `manual`
   (your Push / Preview), reset at local midnight, so you can see how much the
   Pi is talking to the lamp.

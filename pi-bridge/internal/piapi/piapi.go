@@ -67,6 +67,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.wifiSignal(w, r)
 	case "/api/logs":
 		h.logs(w, r)
+	case "/api/warnings/status":
+		// Phase 4 adds a real warnings feed; until then answer 200 with an
+		// empty list so the shared UI doesn't log a 404 on every poll.
+		writeJSON(w, http.StatusOK, map[string]any{"warnings": []any{}, "count": 0})
 
 	case "/api/ramp/status":
 		h.rampStatus(w, r)
