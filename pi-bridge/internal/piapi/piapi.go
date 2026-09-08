@@ -25,22 +25,33 @@ import (
 )
 
 type Deps struct {
-	Next   http.Handler
-	API    *httpapi.Server
-	Engine *engine.Engine
-	Lamp   *lamp.Lamp
-	Log    *ringlog.Ring
-	TZ     *time.Location
-	WlanIf string // e.g. "wlan0"
+	Next    http.Handler
+	API     *httpapi.Server
+	Engine  *engine.Engine
+	Lamp    *lamp.Lamp
+	Log     *ringlog.Ring
+	TZ      *time.Location
+	WlanIf  string        // e.g. "wlan0"
+	DataDir string        // fallback if FX is nil
+	FX      *EffectsStore // share the same store the Provider uses
 }
 
-type handler struct{ Deps }
+type handler struct {
+	Deps
+	fx *EffectsStore
+}
 
 func Wrap(d Deps) http.Handler {
 	if d.WlanIf == "" {
 		d.WlanIf = "wlan0"
 	}
-	return &handler{d}
+	fx := d.FX
+	if fx == nil {
+		fx = NewEffectsStore(d.DataDir)
+	}
+	h := &handler{Deps: d, fx: fx}
+	h.applyRampCadence() // restore the tick cadence for a persisted ramp state
+	return h
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -53,6 +64,39 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.wifiSignal(w, r)
 	case "/api/logs":
 		h.logs(w, r)
+
+	case "/api/ramp/status":
+		h.rampStatus(w, r)
+	case "/api/ramp/start":
+		h.rampStart(w, r)
+	case "/api/ramp/stop":
+		h.rampStop(w, r)
+	case "/api/ramp/tick":
+		h.rampTick(w, r)
+
+	case "/api/feed/status":
+		h.feedStatus(w, r)
+	case "/api/feed/start":
+		h.feedStart(w, r)
+	case "/api/feed/stop":
+		h.feedStop(w, r)
+
+	case "/api/maintenance/status":
+		h.maintStatus(w, r)
+	case "/api/maintenance/start":
+		h.maintStart(w, r)
+	case "/api/maintenance/stop":
+		h.maintStop(w, r)
+
+	case "/api/acclimation/config":
+		h.acclimationConfig(w, r)
+	case "/api/acclimation/status":
+		h.acclimationStatus(w, r)
+	case "/api/seasonal/config":
+		h.seasonalConfig(w, r)
+	case "/api/seasonal/status":
+		h.seasonalStatus(w, r)
+
 	case "/api/push", "/api/master":
 		// let the vendored handler persist it, then recompute immediately
 		h.Next.ServeHTTP(w, r)
@@ -64,12 +108,24 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// Provider implements engine.Provider by combining httpapi's stored working
-// state with pi-bridge's own (later) effect configs. It is standalone so the
-// engine can be constructed before the HTTP middleware.
-type Provider struct{ API *httpapi.Server }
+// FX exposes the effects store so the Provider can read acclimation/seasonal.
+func (h *handler) FX() *EffectsStore { return h.fx }
 
-func NewProvider(api *httpapi.Server) *Provider { return &Provider{API: api} }
+// Provider implements engine.Provider by combining httpapi's stored working
+// state with pi-bridge's own effect configs (acclimation, seasonal). Standalone
+// so the engine can be constructed before the HTTP middleware.
+type Provider struct {
+	API *httpapi.Server
+	FX  *EffectsStore
+	TZ  *time.Location
+}
+
+func NewProvider(api *httpapi.Server, fx *EffectsStore, tz *time.Location) *Provider {
+	if tz == nil {
+		tz = time.Local
+	}
+	return &Provider{API: api, FX: fx, TZ: tz}
+}
 
 func (p *Provider) EngineSnapshot() engine.Snapshot {
 	st := p.API.StateSnapshot()
@@ -102,6 +158,20 @@ func (p *Provider) EngineSnapshot() engine.Snapshot {
 	cfg.Lunar.MaxIntensity = nz(st.Lunar.MaxIntensity, 15)
 	cfg.Lunar.DayThreshold = st.Lunar.DayThreshold
 	cfg.Lunar.TrackMoonrise = st.Lunar.TrackMoonrise
+
+	if p.FX != nil {
+		p.FX.mu.Lock()
+		a, se := p.FX.Acclimation, p.FX.Seasonal
+		p.FX.mu.Unlock()
+		cfg.Acclimation.Enabled = a.Enabled
+		cfg.Acclimation.StartPercent = a.StartPercent
+		cfg.Acclimation.DurationDays = a.DurationDays
+		if t, err := time.Parse(time.RFC3339, a.StartISO); err == nil {
+			cfg.Acclimation.StartEpoch = t.Unix()
+		}
+		cfg.Seasonal.Enabled = se.Enabled
+		cfg.Seasonal.MaxShiftMinutes = se.MaxShiftMinutes
+	}
 
 	return engine.Snapshot{
 		Base:     base,
@@ -197,3 +267,5 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
 }
+
+func errObj(msg string) map[string]any { return map[string]any{"ok": false, "error": msg} }

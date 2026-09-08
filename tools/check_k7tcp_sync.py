@@ -26,12 +26,28 @@ SHA_FILE = ROOT / "pi-bridge" / "internal" / "k7tcp" / "UPSTREAM_SHA"
 ANCHOR = "package k7tcp"
 
 
-def body(path: Path) -> str:
+# The one deliberate change pi-bridge applies to the vendored copy (see the
+# file header). We transform the *upstream* body the same way before diffing,
+# so any OTHER drift still trips the check.
+KNOWN_PATCHES = [
+    (
+        '\taddr := fmt.Sprintf("%s:%d", c.Host, c.Port)',
+        "\taddr := net.JoinHostPort(c.Host, strconv.Itoa(c.Port))",
+    ),
+    ('\t"net"\n\t"strings"', '\t"net"\n\t"strconv"\n\t"strings"'),
+]
+
+
+def body(path: Path, apply_patches: bool = False) -> str:
     text = path.read_text(encoding="utf-8")
     idx = text.find(ANCHOR)
     if idx < 0:
         sys.exit(f"{path}: no `{ANCHOR}` line found")
-    return text[idx:]
+    out = text[idx:]
+    if apply_patches:
+        for old, new in KNOWN_PATCHES:
+            out = out.replace(old, new)
+    return out
 
 
 def header(path: Path) -> str:
@@ -57,7 +73,7 @@ def main() -> int:
     if not UPSTREAM.exists():
         sys.exit(f"upstream file missing: {UPSTREAM}")
 
-    up = body(UPSTREAM)
+    up = body(UPSTREAM, apply_patches=True)
 
     if args.fix:
         hdr = header(VENDORED) or (

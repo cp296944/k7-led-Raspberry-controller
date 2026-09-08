@@ -1,12 +1,17 @@
 // Package k7tcp speaks the Noo-Psyche K7 lamp's binary TCP protocol
 // (port 8266, frame: AA A5 <cmd> <data> BB, 6 channels, 24 slots).
 //
-// VENDORED, DO NOT EDIT BY HAND. Source of truth:
-//   github.com/bitbarista/k7-led-controller  pc-bridge/internal/k7tcp/client.go
-//   synced from upstream/master @ dafa6809fdf85fe44445b3ce2735605e0f884320
-// pi-bridge is a sibling module and cannot import pc-bridge/internal/*, so this
-// one file is copied verbatim. tools/check_k7tcp_sync.py fails CI on drift.
-// Re-sync: copy the upstream file over this one, keep this header, update the SHA.
+// VENDORED from pc-bridge/internal/k7tcp/client.go (upstream/master
+// @ dafa6809fdf85fe44445b3ce2735605e0f884320). pi-bridge is a sibling module
+// and cannot import pc-bridge/internal/*, so this file is copied.
+//
+// ONE deliberate change from upstream (kept minimal so re-sync stays trivial):
+//   connect(): fmt.Sprintf("%s:%d", host, port) -> net.JoinHostPort(host,
+//   strconv.Itoa(port)). IPv6-safe, and it silences Go 1.27's `hostport`
+//   vet analyzer for every package that imports this. Worth a PR upstream.
+//
+// tools/check_k7tcp_sync.py applies the same transform to the upstream body
+// before diffing, so it still fails CI on any *other* drift.
 
 package k7tcp
 
@@ -15,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -175,7 +181,7 @@ func (c Client) setMode(mode byte) error {
 }
 
 func (c Client) connect() (net.Conn, error) {
-	addr := fmt.Sprintf("%s:%d", c.Host, c.Port)
+	addr := net.JoinHostPort(c.Host, strconv.Itoa(c.Port))
 	conn, err := net.DialTimeout("tcp", addr, c.Timeout)
 	if err != nil {
 		return nil, fmt.Errorf("connect %s: %w", addr, err)
