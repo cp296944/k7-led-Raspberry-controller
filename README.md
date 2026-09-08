@@ -1,214 +1,151 @@
-<!-- ─────────────────────────────────────────────────────────────────────────
-     FORK NOTICE — this section is the only change to this file vs upstream,
-     kept at the very top so `git merge upstream/master` stays trivial.
-     ───────────────────────────────────────────────────────────────────────── -->
-> ## 🍓 This fork adds **`pi-bridge/`** — a Raspberry Pi controller
->
-> Upstream's ESP32 controller has to join the **lamp's own Wi-Fi AP**, which
-> strands it on the lamp's private network — unreachable from your home LAN.
-> The K7's "LAN mode" (lamp joins your router) is unreliable.
->
-> A **Raspberry Pi has two network interfaces**, so it sits on both at once:
-> `wlan0` → the lamp's AP (rock-solid, one client), `eth0` → your home LAN.
-> `pi-bridge` runs the full always-on lighting engine on the Pi, serves the
-> **unmodified** upstream web UI to your whole LAN, proxies the raw protocol,
-> **updates itself over the air** from this repo's GitHub Releases, and adds a
-> Traditional-Chinese UI overlay + per-lamp profile storage.
->
-> **Goal: 1:1 feature parity with the ESP32 firmware** — all 18 capability
-> flags the shared UI checks, implemented on the Pi.
->
-> → **[`pi-bridge/README.md`](pi-bridge/README.md)** ·
-> **[design](pi-bridge/docs/DESIGN.md)** ·
-> **[plan](pi-bridge/docs/PLAN.md)** ·
-> **[live progress](pi-bridge/PROGRESS.md)**
->
-> ```bash
-> # on a Raspberry Pi (Debian arm64), from a checkout:
-> sudo pi-bridge/deploy/install.sh
-> # then open  http://<pi-hostname>/  from any device on your LAN
-> ```
->
-> Everything below is upstream's original README, unchanged.
+# K7 Pi Wi‑Fi Controller
 
----
-
-# K7 LED Controller
-
-An unofficial web-based controller for **Noo-Psyche K7 Mini** and **K7 Pro** LED aquarium lamps.
+A **24/7 controller for the Noo‑Psyche K7 Pro / K7 Mini aquarium light that runs
+on a Raspberry Pi**, is reachable from your whole home LAN, updates itself over
+the air, and speaks Traditional Chinese.
 
 <div align="center">
 
 ![License](https://img.shields.io/badge/license-MIT-blue)
-![Platform](https://img.shields.io/badge/platform-ESP32--S3-c51a4a)
-![Firmware](https://img.shields.io/badge/firmware-v2.6.21-0369a1)
-<a href="https://ko-fi.com/bitbarista" target="_blank"><img src="https://img.shields.io/badge/Ko--fi-Support%20the%20Project-FF5E5B?logo=ko-fi&logoColor=white" alt="Support on Ko-fi"></a>
+![Platform](https://img.shields.io/badge/platform-Raspberry%20Pi%20(arm64)-c51a4a)
+![Fork of](https://img.shields.io/badge/fork%20of-bitbarista%2Fk7--led--controller-0369a1)
 
 </div>
 
-> This is an independent, community-developed project. It is not affiliated with or endorsed by Noo-Psyche.
-
-<div align="center">
-<img src="docs/screenshot.png" alt="K7 LED Controller UI" width="90%">
-<br><em>ESP32 Controller — browser UI served from the board</em>
-</div>
-
-## Variants
-
-| Variant | Platform | Always-on runtime |
-|---------|----------|-------------------|
-| **ESP32 controller** *(recommended)* | Any phone or browser | Yes — Smooth Ramp, Lunar, Feed mode, and more |
-| **PC Bridge** | Windows, Linux | No — schedule push only |
-| **Android app** | Android | No — schedule push; Feed & Maintenance mode via home screen widget |
-
-The ESP32 controller is the full-featured option: a small board runs 24/7 beside the tank and provides the complete web interface from any device. The PC Bridge and Android app connect directly to the lamp for schedule editing but do not run continuously. All three share the same web UI.
-
-<div align="center">
-<img src="docs/screenshot-pc-bridge.png" alt="K7 PC Bridge" width="90%">
-<br><em>PC Bridge — Windows &amp; Linux</em>
-<br><br>
-<img src="docs/screenshot-android.png" alt="K7 Android App" width="28%">
-<br><em>Android App</em>
-</div>
+> Independent community project. Not affiliated with or endorsed by Noo‑Psyche.
+> Built on **[bitbarista/k7‑led‑controller](https://github.com/bitbarista/k7-led-controller)**
+> (MIT) — the ESP32 firmware, the desktop PC Bridge, the Android app and the
+> shared web UI all still live in this repo, unchanged.
 
 ---
 
-## Features
+## Why a Raspberry Pi
 
-- Read the current schedule and mode directly from the lamp
-- Edit the 24-hour lighting schedule on an interactive drag-and-drop chart (desktop) or the mobile chart editor with scroll-wheel hour editing
-- Additive colour preview strip showing the blended light output for each hour
-- Built-in preset library for Fish Only, LPS Reef, SPS Reef, Mixed Reef, Soft Mixed Reef, Acclimation Mixed, LPS Low Energy, Shallow SPS, and temporary Dino Suppression with dark overnight periods, practical coral photoperiods, and short dusk tails
-- Master brightness slider and per-channel brightness-cap sliders (each sets that channel's output ceiling), on both the desktop and mobile layouts
-- Tap any brightness percentage to type an exact value instead of dragging, plus a lock to keep the master and colour sliders from being nudged by accident while scrolling on a phone
-- Per-channel visibility toggles — hidden channels are zeroed when pushing to the device
-- Day-shift control to slide the entire schedule forward or back (e.g. peak at 18:00 instead of midday)
-- Save and reload your own named profiles (stored on the controller, persists across sessions)
+The upstream **ESP32 controller** joins the lamp's own Wi‑Fi AP as its only
+network — which strands it on the lamp's private `192.168.4.x` island,
+unreachable from your home LAN. The K7's **LAN mode** (lamp joins your router)
+is widely reported as flaky.
+
+A Raspberry Pi has **two network interfaces**, so it sits on both at once:
+
+```
+   K7 Pro AP                Raspberry Pi                 home router / LAN
+ ┌───────────┐   wlan0    ┌────────────────┐   eth0    ┌──────────────────┐
+ │192.168.4.1│◄──Wi-Fi────│ k7-pi-bridge    │◄──cable──►│ any browser · HA │
+ │  :8266    │ (like a phone)│  :80  :8266   │           │  on your LAN     │
+ └───────────┘             └────────────────┘           └──────────────────┘
+```
+
+- **wlan0 → the lamp's AP** — the Pi is the only client, so the lamp stays in
+  the mode that actually works. (`wlan0` is hardened to never carry a default
+  route: if the LAN cable is unplugged the Pi loses internet rather than
+  black‑holing everything through the lamp.)
+- **eth0 → your LAN** — wired, rock‑solid.
+- Open **`http://<pi-hostname>/`** from any device on your network.
+- If the Pi is off, the lamp keeps running the last **native schedule** it was
+  given, so a Pi outage never means a dark tank.
+
+---
+
+## What this adds on top of upstream
+
+| | |
+|---|---|
+| **Always‑on engine on the Pi** | The full lighting engine (`arduino/src/Effects.cpp` ported to Go) runs as a systemd service: 24‑slot schedule interpolation, Smooth Ramp cadence, Feed / Maintenance timed overrides, Lunar (synodic + moonrise‑tracked), Siesta, Acclimation, Seasonal Shift — all the ESP32's runtime features, none of the ESP32 needed. |
+| **Over‑the‑air updates** | Tag a release on GitHub → the Pi verifies it (SHA‑256), swaps it in atomically, and self‑restarts, with automatic rollback if the new build won't stay healthy. A **"Check for updates"** button and an **Auto** toggle live in the top bar (Auto is **off** by default). Click the **version chip** for the full release history. |
+| **Traditional‑Chinese UI** | A conservative overlay translates the basic UI text (Save, Read, Push, Apply, …); proper nouns are left alone. **中/EN** switch in the top bar. |
+| **Per‑lamp profile storage** | Saved profiles are keyed by the lamp's MAC (`data/profiles/<lamp>/`) — swapping or running two lamps never mixes them, and an OTA update never touches them. Existing profiles migrate automatically. |
+| **Live spectrum value table** | A collapsible grid under the chart: type an exact % per hour per channel and the chart follows live; drag the chart and the numbers follow. Plus ±1h rotate and ±1% power nudge per channel. |
+| **Explicit apply** | Nothing reaches the lamp until you press **⬆ Push** — the master slider and Shift no longer auto‑write. The Push button shows a pulsing marker when there are unsent edits. |
+| **Wi‑Fi signal indicator** | Live RSSI / quality to the lamp in the top bar, colour‑coded. |
+| **Raw 8266 proxy** | `:8266` on the LAN side forwards straight to the lamp, so the desktop PC Bridge or any protocol tool can drive it through the Pi. |
+| **Home Assistant** *(planned)* | A REST surface + a small `custom_components/k7_lamp` integration. |
+
+The upstream file tree (`pc-bridge/`, `shared-ui/`, `arduino/`) is **never
+edited** — everything above is additive, in `pi-bridge/`, so this fork stays
+mergeable with upstream.
+
+---
+
+## Install on a Raspberry Pi
+
+Debian (Bookworm / Trixie), **arm64**, dual‑homed: `eth0` on your LAN, `wlan0`
+joined to the lamp's AP (`K7_Pro…`, PSK `12345678`).
+
+```bash
+git clone https://github.com/cp296944/k7-led-Raspberry-controller
+cd k7-led-Raspberry-controller
+sudo pi-bridge/deploy/install.sh          # bootstraps the binary from the latest release
+sudo pi-bridge/deploy/setup-network.sh    # wlan0 never-default hardening (optional, recommended)
+```
+
+Then open `http://<pi-hostname>/` from any device on your LAN. From then on the
+service updates itself from this repo's GitHub Releases (via the top‑bar button;
+Auto is off by default).
+
+`pi-bridge/deploy/uninstall.sh` removes it (keeps `data/` unless `--purge`).
+See **[pi-bridge/README.md](pi-bridge/README.md)** and
+**[pi-bridge/docs/DESIGN.md](pi-bridge/docs/DESIGN.md)** for the internals, and
+**[pi-bridge/PROGRESS.md](pi-bridge/PROGRESS.md)** for live status.
+
+---
+
+## Features (shared web UI)
+
+Everything the upstream shared UI offers works here — the Pi simply advertises
+every capability as available:
+
+- Read the current schedule and mode from the lamp; edit the 24‑hour schedule
+  on a drag‑and‑drop chart or the **live value table**
+- Additive colour‑preview strip; **Effective Today** view; **Right Now** output
+  bars backed by the engine's real computed output; schedule‑aware checks
+- Built‑in preset library (Fish Only, LPS/SPS/Mixed/Soft Reef, Acclimation,
+  Shallow SPS, Dino Suppression, …); named profiles saved per‑lamp
+- Master brightness + per‑channel brightness‑cap sliders; per‑channel
+  visibility toggles; **type‑exact** value entry; **Day‑shift** to slide the
+  whole photoperiod
 - Manual mode with live preview
-- **Smooth Ramp** — without Smooth Ramp the controller sends one interpolated brightness update per hour to keep the lamp in step with the schedule; enable Smooth Ramp to increase this to about every 2 minutes, only when calculated channel values change, for smoother sunrise and sunset transitions
-- **Feed mode** — timed white brightness boost for feeding; adjustable intensity (1–100 %) and duration (1–60 min); also triggered by a quick press of the BOOT button on the board
-- **Maintenance mode** — timed balanced inspection light for tank work, with adjustable profile intensity (1–100 %) and duration (1–180 min)
-- **Lunar** — varies the royal blue channel over the 29.5-day synodic cycle, with either a fixed nightly window or a moonrise/moonset-shifted window anchored to full-moon times, plus optional night clamping and schedule-aware cutoff
-- **Siesta** — optional midday dimming window for a coral rest/algae-control break; works with or without Smooth Ramp
-- **Acclimation** — start the whole schedule dimmer, then recover gradually over a chosen number of days
-- **Seasonal Shift** — move the whole photoperiod earlier and later across the year without changing day length
-- **Effective Today** chart view, firmware-backed Right Now output bars, and schedule-aware checks so you can see the real computed output and catch odd combinations before they surprise you
-- Preset-only export/import for sharing schedules safely, plus GitHub issue drafts and app-compatible QR codes for public built-in and reviewed community profiles
-- Backup export/import and persistent userdata storage so profiles and settings survive normal firmware and UI flashes
-- Supports K7 Mini (3 channels) and K7 Pro (6 channels)
+- **Smooth Ramp** — the engine already interpolates and pushes only on change;
+  turning ramp on tightens the tick cadence to ~1 min, off relaxes it to ~5 min
+- **Feed mode** — timed white boost, 1–100 % / 1–60 min
+- **Maintenance mode** — timed balanced inspection light, 1–100 % / 1–180 min
+- **Lunar** — royal‑blue over the 29.5‑day synodic cycle, fixed or
+  moonrise‑tracked window, night clamp, schedule‑aware cutoff
+- **Siesta** — midday dimming window
+- **Acclimation** — start dimmer, recover over N days
+- **Seasonal Shift** — move the photoperiod earlier/later across the year
+- Preset export/import, community profiles, backup export/import
+- K7 Mini (3 channels) and K7 Pro (6 channels)
 
 ---
 
-## Hardware (ESP32 controller)
+## Other ways to run it (from upstream, still in this repo)
 
-An ESP32-S3 board sits between your lamp and your devices, creating its own WiFi network. No PC required — the controller runs 24/7 and is always accessible from any phone or browser.
+| Variant | Platform | Always‑on |
+|---|---|---|
+| **ESP32‑S3 controller** | phone / browser | yes — but stranded on the lamp's AP |
+| **PC Bridge** | Windows, Linux | no — schedule push only |
+| **Android app** | Android | no — push + Feed/Maintenance widget |
 
-Two boards are supported:
-
-| Board | Flash | Notes |
-|-------|-------|-------|
-| **ESP32-S3 SuperMini** | 4 MB | Compact and inexpensive. Widely available from AliExpress and similar. |
-| **Seeed XIAO ESP32-S3** | 8 MB | More flash and PSRAM. Available from Seeed Studio, Mouser, or similar. The standard (non-Sense) variant works fine. |
-
-Either board draws ~80 mA and can run from any USB phone charger.
-
----
-
-## Documentation
-
-Full setup and usage guide: **[bitbarista.github.io/k7-led-controller/guide.html](https://bitbarista.github.io/k7-led-controller/guide.html)**
-
-## Support
-
-K7 LED Controller is a spare-time open source project. If it has helped with your reef lighting setup, you can support continued development and testing.
-
-<div align="center">
-
-<a href="https://ko-fi.com/bitbarista" target="_blank"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support on Ko-fi"></a>
-
-</div>
-
----
-
-## Flashing
-
-Visit **[bitbarista.github.io/k7-led-controller/flash.html](https://bitbarista.github.io/k7-led-controller/flash.html)**, connect your board via USB, and click **Install** next to your board type. Works in Chrome, Edge, and Opera — no software required.
-
-If the device is not detected, hold the **BOOT** button while pressing **RST**, then click Install again.
-
----
-
-## First-time WiFi setup
-
-After flashing, the device starts a setup portal:
-
-1. Connect to the **K7-Setup-XXXXXX** WiFi network (open, no password — the suffix is unique to your board)
-2. Browse to **http://192.168.5.1** — the device scans for nearby K7 lamps automatically
-3. Select your lamp from the list and tap **Connect & Save**
-4. The device reboots. Connect to your **lamp's WiFi network** (K7-XXXXXX)
-5. Browse to **http://k7controller.local** — the controller loads and reads the lamp. If mDNS doesn't resolve, use the fixed IP **http://192.168.4.200** instead.
-
-> To reset to setup mode (e.g. to change lamps), hold the BOOT button on the board while powering on for 3 seconds.
-
-> If your lamp is not found, make sure it is powered on. You can also enter the SSID manually.
-
----
-
-## Network architecture
-
-```
-Your phone/browser ── K7 lamp AP (192.168.4.x) ── [ESP32-S3 @ 192.168.4.200] ── K7 lamp (192.168.4.1)
-```
-
-All devices connect to the lamp's own WiFi network. The ESP32-S3 runs in STA-only mode — no separate controller AP. Your home network is never involved.
-
-The controller uses a **static IP of 192.168.4.200** so the address never changes after a WiFi reconnect. Bookmark `http://192.168.4.200` as a reliable fallback if `http://k7controller.local` is not resolving.
+Upstream setup and flashing guides:
+**[bitbarista.github.io/k7-led-controller/guide.html](https://bitbarista.github.io/k7-led-controller/guide.html)**.
 
 ---
 
 ## Notes
 
-- Profiles and settings are saved to flash and survive power cycles
-- Smooth ramp, lunar cycle, feed mode, maintenance mode, and other schedule modifiers run entirely on the device — no browser needed once configured
-- **Live luminance commands and NVR:** The ESP32 controller sends live luminance commands to the lamp continuously — once per hour without Smooth Ramp, and about every 2 minutes with Smooth Ramp enabled, only when calculated channel values change. The PC Bridge and Android app send commands only when you explicitly push or preview. Push explicitly writes the 24-hour schedule to the lamp's storage. For the continuous live commands, the Noo-Psyche lamp firmware is closed so we cannot verify whether the lamp also stores those internally or how it manages write wear. Smooth Ramp sends commands more frequently, which may increase any internal write activity — use it at your own discretion.
-- Normal firmware updates and LittleFS web UI flashes no longer erase saved profiles and config; only a full erase/factory reset clears them
-- After updating firmware, reselect and push a built-in preset once if you want the controller to replace an older saved schedule with the latest preset definition
-- Dino Suppression is a temporary light-reduction preset for Ostreopsis/Prorocentrum pressure management; it disables Lunar/moonlight when pushed so nights remain fully dark
-- **Applying a change takes approximately 1 second to take effect on the lamp.** This is normal — each change requires a full TCP round-trip to the lamp (connect, send schedule + brightness, wait for acknowledgement, disconnect). Rapid successive changes are batched: only the latest value is sent. This is a constraint of the K7 lamp's TCP protocol, not a bug in the controller.
+- The lamp accepts one TCP connection at a time and has no locking; the engine,
+  the web API and the proxy share a single mutex so they never collide.
+- The Noo‑Psyche lamp firmware is closed, so we can't verify how it manages
+  flash write‑wear for the continuous luminance commands. Smooth Ramp writes
+  more often — it's **off by default** here for that reason.
+- Applying a change takes ~1 s (a full TCP round‑trip); rapid changes are
+  coalesced to the latest value. This is the lamp protocol, not a bug.
+- `master` branch is protected (no force‑push, no deletion).
 
----
+## Credit & licence
 
-## Device support
-
-| Device  | Channels |
-|---------|----------|
-| K7 Mini | White, Royal Blue, Blue |
-| K7 Pro  | White, Royal Blue, Green, UV, Cyan, Red |
-
-## Protocol
-
-The lamp communicates over TCP on port 8266 using a simple binary framing protocol (`AA A5 [CMD] [data] BB`). The full implementation is in `arduino/src/K7Lamp.cpp`.
-
-## Disclaimer
-
-This project is provided "AS IS" without warranty of any kind. The author makes no representations about suitability, reliability, availability, or accuracy for any purpose.
-
-K7 LED Controller changes live lighting output and stores schedules and settings locally — on the ESP32 board, on your PC, or on your phone depending on which variant you use. Incorrect settings, firmware bugs, WiFi issues, or unexpected lamp behaviour could affect aquarium lighting and livestock. With the ESP32 controller, hardware faults or power loss could also disrupt the running schedule. Test changes carefully and keep your own backups.
-
-The Noo-Psyche lamp firmware is closed. The ESP32 controller sends live luminance commands to the lamp continuously — once per hour without Smooth Ramp, and about every 2 minutes with Smooth Ramp enabled, only when calculated channel values change. The PC Bridge and Android app send commands only when you explicitly push or preview a schedule. Push explicitly writes the 24-hour schedule to the lamp's storage. For the continuous live commands, we cannot verify whether the lamp also stores those internally or how it manages write wear.
-
-**Your use is at your sole risk.** The author shall not be liable for any damage, livestock loss, data loss, hardware failure, or other direct, indirect, incidental, punitive, or consequential damages arising from use of this project.
-
-## Building from source
-
-Requires [PlatformIO](https://platformio.org/).
-
-```bash
-cd arduino
-pio run -e supermini    # ESP32-S3 SuperMini (4 MB)
-pio run -e xiao         # Seeed XIAO ESP32-S3 (8 MB)
-```
-
-## Licence
-
-[MIT](LICENSE)
+MIT, same as upstream. Enormous credit to
+**[bitbarista](https://github.com/bitbarista)** for the reverse‑engineered
+protocol, the shared UI, and the whole original project — if it helps your reef,
+[support them on Ko‑fi](https://ko-fi.com/bitbarista).

@@ -115,6 +115,51 @@
     l.style.cssText = 'display:inline-flex;gap:3px;align-items:center;font-size:0.76rem;color:var(--muted,#8a95a3);cursor:pointer';
   }
 
+  // ---- version chip -> changelog popup --------------------------------
+  function mountVersionChangelog() {
+    var chip = document.getElementById('versionChip');
+    if (!chip || chip.dataset.k7pi) return;
+    chip.dataset.k7pi = '1';
+    chip.style.cursor = 'pointer';
+    chip.title = (dict['View release history'] || '查看更新歷程');
+    chip.addEventListener('click', openChangelog);
+  }
+  function openChangelog() {
+    if (document.getElementById('k7pi-changelog')) return;
+    var back = el('div', { id: 'k7pi-changelog' });
+    back.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.55);display:flex;align-items:flex-start;justify-content:center;padding:6vh 12px';
+    back.onclick = function (e) { if (e.target === back) back.remove(); };
+    var panel = el('div');
+    panel.style.cssText = 'background:var(--surface,#1c2229);color:var(--text,#e7ecf1);border:1px solid var(--border,#2c343d);border-radius:10px;max-width:680px;width:100%;max-height:82vh;overflow:auto;box-shadow:0 12px 40px rgba(0,0,0,.5)';
+    var head = el('div'); head.style.cssText = 'position:sticky;top:0;background:inherit;display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border,#2c343d);font-weight:600';
+    head.appendChild(document.createTextNode(dict['Release history'] || '更新歷程'));
+    var x = el('button', { type: 'button', textContent: '✕' }); styleBtn(x); x.onclick = function () { back.remove(); };
+    head.appendChild(x);
+    var listEl = el('div'); listEl.style.cssText = 'padding:8px 16px 18px';
+    listEl.textContent = '…';
+    panel.appendChild(head); panel.appendChild(listEl); back.appendChild(panel);
+    document.body.appendChild(back);
+
+    fetch('/api/update/history').then(function (r) { return r.json(); }).then(function (d) {
+      listEl.textContent = '';
+      var cur = d.current;
+      (d.releases || []).forEach(function (rel) {
+        var item = el('div'); item.style.cssText = 'padding:10px 0;border-bottom:1px solid var(--border,#2c343d)';
+        var t = el('div'); t.style.cssText = 'font-weight:600;font-size:0.92rem;display:flex;gap:8px;align-items:center';
+        t.appendChild(document.createTextNode(rel.tag));
+        if (rel.tag === cur) { var b = el('span', { textContent: dict['installed'] || '目前' }); b.style.cssText = 'font-size:0.72rem;background:#2e7d32;color:#fff;border-radius:4px;padding:1px 6px'; t.appendChild(b); }
+        if (rel.prerelease) { var p = el('span', { textContent: 'pre' }); p.style.cssText = 'font-size:0.72rem;color:var(--muted,#93a1af)'; t.appendChild(p); }
+        var when = el('span', { textContent: (rel.published_at || '').slice(0, 10) }); when.style.cssText = 'font-size:0.75rem;color:var(--muted,#93a1af);margin-left:auto';
+        t.appendChild(when);
+        var notes = el('pre', { textContent: (rel.notes || '').trim() || '—' });
+        notes.style.cssText = 'white-space:pre-wrap;font:0.8rem/1.45 ui-monospace,monospace;color:var(--muted,#b5c0cc);margin:6px 0 0;max-height:200px;overflow:auto';
+        item.appendChild(t); item.appendChild(notes);
+        listEl.appendChild(item);
+      });
+      if (!listEl.children.length) listEl.textContent = dict['No history available'] || '沒有可用的歷程';
+    }).catch(function (e) { listEl.textContent = '✗ ' + e; });
+  }
+
   function checkUpdate(status, wrap) {
     status.textContent = '…';
     fetch('/api/update/status').then(function (r) { return r.json(); }).then(function (d) {
@@ -265,126 +310,137 @@
     setInterval(poll, 15000);
   }
 
-  // ---- FEAT-A: manual hourly value table -------------------------------
-  // A self-contained 24×6 editable grid (type exact %), a ±1h rotate and a
-  // ±1% power nudge, and "套用到燈" which POSTs straight to /api/push. It never
-  // needs the page's chart internals; "從裝置載入" seeds it from /api/state.
-  var K7PRO_CH = ['white', 'royal_blue', 'green', 'uv', 'cyan', 'red'];
-  var CH_LABEL = { white: 'White', royal_blue: 'Royal Blue', green: 'Green', uv: 'UV', cyan: 'Cyan', red: 'Red' };
+  // ---- FEAT-A: 光譜數值表 (live-linked with the chart) -------------------
+  // The grid mirrors chart.data.datasets: pick a profile / drag a point / press
+  // Read and the numbers follow; type a number and the chart follows, live.
+  // Writes go through the page's own dragData.onDrag so scheduleBase stays
+  // authoritative for Push.
+  var GRID_TITLE = function () { return dict['Spectrum value table'] || '光譜數值表'; };
+
+  function chartCols() {
+    var c = window.chart;
+    if (!c || !c.data || !c.data.datasets) return [];
+    var seen = {}, out = [];
+    c.data.datasets.forEach(function (ds, i) {
+      if (ds && ds.channelKey && !seen[ds.channelKey] &&
+        String(ds.label || '').indexOf('full moon') < 0) {
+        seen[ds.channelKey] = 1;
+        out.push({ key: ds.channelKey, ds: i, label: ds.label || ds.channelKey });
+      }
+    });
+    return out;
+  }
+  function gridCellVal(dsIndex, h) {
+    try { return Math.round(window.chart.data.datasets[dsIndex].data[h] || 0); } catch (e) { return 0; }
+  }
+  function gridWrite(dsIndex, h, v) {
+    v = clampv(v);
+    var c = window.chart;
+    var cfgD = c && (c._dragDataConfig || (c.options.plugins.dragData));
+    if (cfgD && typeof cfgD.onDrag === 'function') {
+      // this updates schedule[] AND scheduleBase[] the way a real drag would
+      if (typeof window.setChartMode === 'function') window.setChartMode('base');
+      cfgD.onDrag(null, dsIndex, h, v);
+    } else if (c) {
+      c.data.datasets[dsIndex].data[h] = v;
+    }
+    if (c) c.update('none');
+    if (typeof window.updateColorStrip === 'function') window.updateColorStrip();
+  }
 
   function mountValueTable() {
     if (document.getElementById('k7pi-grid')) return;
     var anchor = document.getElementById('autoPanel') || document.querySelector('.chart-canvas-wrap');
-    if (!anchor) return;
+    if (!anchor || !window.chart) return;
 
     var box = el('div', { id: 'k7pi-grid' });
     box.style.cssText = 'margin-top:10px;border:1px solid var(--border,#2c343d);border-radius:8px;background:var(--surface,#1c2229);overflow:hidden';
-
-    var head = el('button', { type: 'button', className: 'k7pi-grid-head' });
-    head.textContent = (dict['Hourly value table'] || '逐時數值表') + '  ▾';
-    head.style.cssText = 'width:100%;text-align:left;background:transparent;border:0;color:var(--text,#e7ecf1);' +
-      'padding:8px 12px;cursor:pointer;font:inherit;font-weight:600';
+    var head = el('button', { type: 'button' });
+    head.style.cssText = 'width:100%;text-align:left;background:transparent;border:0;color:var(--text,#e7ecf1);padding:8px 12px;cursor:pointer;font:inherit;font-weight:600';
     var body = el('div'); body.hidden = true; body.style.cssText = 'padding:10px 12px 14px';
+    var setLabel = function () { head.textContent = GRID_TITLE() + (body.hidden ? '  ▾' : '  ▴'); };
+    setLabel();
+    var timer = null;
     head.onclick = function () {
       body.hidden = !body.hidden;
-      head.textContent = (dict['Hourly value table'] || '逐時數值表') + (body.hidden ? '  ▾' : '  ▴');
+      setLabel();
       if (!body.hidden && !body.dataset.built) { buildGrid(body); body.dataset.built = '1'; }
+      if (!body.hidden) { timer = setInterval(function () { body._sync && body._sync(); }, 400); }
+      else if (timer) { clearInterval(timer); timer = null; }
     };
     box.appendChild(head); box.appendChild(body);
     anchor.appendChild(box);
   }
 
   function buildGrid(body) {
-    var chs = K7PRO_CH; // device sel could refine this later
-    var tbl = el('table');
-    tbl.style.cssText = 'border-collapse:collapse;font-size:0.8rem;width:100%';
-    var thead = el('tr');
-    thead.appendChild(cell('th', 'h'));
-    chs.forEach(function (c) { thead.appendChild(cell('th', dict[CH_LABEL[c]] || CH_LABEL[c])); });
+    var cols = chartCols();
+    var wrap = el('div');
+    var tbl = el('table'); tbl.style.cssText = 'border-collapse:collapse;font-size:0.8rem;width:100%';
+    var thead = el('tr'); thead.appendChild(cell('th', 'h'));
+    cols.forEach(function (c) { thead.appendChild(cell('th', c.label)); });
     tbl.appendChild(thead);
     var inputs = [];
     for (var h = 0; h < 24; h++) {
       var tr = el('tr'); inputs[h] = [];
       tr.appendChild(cell('td', (h < 10 ? '0' : '') + h + ':00'));
-      for (var ci = 0; ci < 6; ci++) {
-        var inp = el('input', { type: 'number', min: 0, max: 100, value: 0 });
-        inp.style.cssText = 'width:46px;background:var(--surface2,#262e37);border:1px solid var(--border,#2c343d);' +
-          'color:var(--text,#e7ecf1);border-radius:4px;padding:2px 4px;text-align:center;font:inherit';
-        inputs[h][ci] = inp;
-        var td = el('td'); td.style.padding = '2px'; td.appendChild(inp); tr.appendChild(td);
-      }
+      (function (h) {
+        cols.forEach(function (col, k) {
+          var inp = el('input', { type: 'number', min: 0, max: 100, value: gridCellVal(col.ds, h) });
+          inp.style.cssText = 'width:46px;background:var(--surface2,#262e37);border:1px solid var(--border,#2c343d);color:var(--text,#e7ecf1);border-radius:4px;padding:2px 4px;text-align:center;font:inherit';
+          var commit = function () { gridWrite(col.ds, h, parseInt(inp.value, 10) || 0); setDirty(true); };
+          inp.addEventListener('change', commit);
+          inp.addEventListener('input', function () { clearTimeout(inp._t); inp._t = setTimeout(commit, 250); });
+          inputs[h][k] = inp;
+          var td = el('td'); td.style.padding = '2px'; td.appendChild(inp); tr.appendChild(td);
+        });
+      })(h);
       tbl.appendChild(tr);
     }
-
-    var read = function () {
-      return inputs.map(function (row, h) {
-        return [h, 0].concat(row.map(function (i) { return clampv(parseInt(i.value, 10) || 0); }));
-      });
+    // live pull: chart -> grid (skip while a cell is focused)
+    body._sync = function () {
+      var c2 = chartCols();
+      if (c2.length !== cols.length) { body.dataset.built = ''; body.innerHTML = ''; buildGrid(body); return; }
+      for (var h = 0; h < 24; h++) for (var k = 0; k < cols.length; k++) {
+        var inp = inputs[h][k];
+        if (document.activeElement === inp) continue;
+        var v = String(gridCellVal(cols[k].ds, h));
+        if (inp.value !== v) inp.value = v;
+      }
     };
-    var write = function (rows) {
-      for (var h = 0; h < 24 && h < rows.length; h++)
-        for (var ci = 0; ci < 6; ci++) inputs[h][ci].value = rows[h][2 + ci] != null ? rows[h][2 + ci] : 0;
-    };
 
-    var checks = el('div'); checks.style.cssText = 'display:flex;gap:10px;flex-wrap:wrap;margin:8px 0;font-size:0.8rem';
+    var perChan = el('div'); perChan.style.cssText = 'display:flex;gap:10px;flex-wrap:wrap;margin:8px 0;font-size:0.8rem';
     var chk = {};
-    chs.forEach(function (c) {
+    cols.forEach(function (col) {
       var l = el('label'); l.style.cssText = 'display:inline-flex;gap:3px;align-items:center;cursor:pointer';
-      var cb = el('input', { type: 'checkbox', checked: true }); chk[c] = cb;
-      l.appendChild(cb); l.appendChild(document.createTextNode(dict[CH_LABEL[c]] || CH_LABEL[c]));
-      checks.appendChild(l);
+      var cb = el('input', { type: 'checkbox', checked: true }); chk[col.key] = cb;
+      l.appendChild(cb); l.appendChild(document.createTextNode(col.label)); perChan.appendChild(l);
     });
-
-    var bar = el('div'); bar.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-top:8px';
-    var mk = function (txt, fn) { var b = el('button', { type: 'button', textContent: txt }); styleBtn(b); b.onclick = fn; return b; };
-    var rotate = function (dir) { // dir +1 = later
-      var rows = read();
-      var out = rows.map(function (r, h) {
-        var srcH = ((h - dir) % 24 + 24) % 24;
-        var nr = [h, 0];
-        for (var ci = 0; ci < 6; ci++) nr.push(chk[chs[ci]].checked ? rows[srcH][2 + ci] : rows[h][2 + ci]);
-        return nr;
-      });
-      write(out);
-    };
-    var power = function (delta) {
-      var rows = read();
-      write(rows.map(function (r, h) {
-        var nr = [h, 0];
-        for (var ci = 0; ci < 6; ci++) nr.push(chk[chs[ci]].checked ? clampv(rows[h][2 + ci] + delta) : rows[h][2 + ci]);
-        return nr;
-      }));
+    var xform = function (fn) {
+      var cur = [];
+      for (var h = 0; h < 24; h++) { cur[h] = []; for (var k = 0; k < cols.length; k++) cur[h][k] = gridCellVal(cols[k].ds, h); }
+      for (var h2 = 0; h2 < 24; h2++) for (var k2 = 0; k2 < cols.length; k2++) {
+        if (!chk[cols[k2].key].checked) continue;
+        gridWrite(cols[k2].ds, h2, fn(cur, h2, k2));
+      }
+      setDirty(true); body._sync();
     };
 
-    bar.appendChild(mk(dict['Load from device'] || '從裝置載入', function () {
-      fetch('/api/state').then(function (r) { return r.json(); }).then(function (s) {
-        if (s.schedule && s.schedule.length === 24) write(s.schedule);
-        toast(dict['Loaded from device'] || '已從裝置載入');
-      });
+    var barRow = el('div'); barRow.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-top:8px';
+    var mk = function (t, fn) { var b = el('button', { type: 'button', textContent: t }); styleBtn(b); b.onclick = fn; return b; };
+    barRow.appendChild(mk(dict['Load from device'] || '從裝置讀取', function () {
+      if (window.readFromDevice) window.readFromDevice();
     }));
-    bar.appendChild(mk('⟲ -1h', function () { rotate(-1); }));
-    bar.appendChild(mk('⟳ +1h', function () { rotate(1); }));
-    bar.appendChild(mk('－1%', function () { power(-1); }));
-    bar.appendChild(mk('＋1%', function () { power(1); }));
-    var apply = mk('⬆ ' + (dict['Apply to lamp'] || '套用到燈'), function () {
-      apply.disabled = true;
-      fetch('/api/push', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ manual: [0, 0, 0, 0, 0, 0], schedule: read(), mode: 'auto' })
-      }).then(function (r) { return r.json(); }).then(function () {
-        toast(dict['Sent to lamp'] || '已送出到燈');
-        if (window.readFromDevice) try { window.readFromDevice(); } catch (e) {}
-      }).finally(function () { apply.disabled = false; });
-    });
-    apply.style.borderColor = '#4a7';
-    bar.appendChild(apply);
+    barRow.appendChild(mk('⟲ -1h', function () { xform(function (cur, h, k) { return cur[(h + 1) % 24][k]; }); }));
+    barRow.appendChild(mk('⟳ +1h', function () { xform(function (cur, h, k) { return cur[(h + 23) % 24][k]; }); }));
+    barRow.appendChild(mk('－1%', function () { xform(function (cur, h, k) { return cur[h][k] - 1; }); }));
+    barRow.appendChild(mk('＋1%', function () { xform(function (cur, h, k) { return cur[h][k] + 1; }); }));
 
-    body.appendChild(el('div', { textContent: dict['Type each hour’s % per channel, then 套用.'] || '直接輸入每個整點各通道的 %,再按「套用到燈」。' }, []));
+    body.appendChild(el('div', { textContent: dict['Edits sync with the chart live; press ⬆ Push to send.'] || '編輯與上方圖表即時連動;按 ⬆ Push 才送到燈。' }, []));
     body.lastChild.style.cssText = 'font-size:0.78rem;color:var(--muted,#93a1af);margin-bottom:8px';
     var scroll = el('div'); scroll.style.cssText = 'max-height:340px;overflow:auto'; scroll.appendChild(tbl);
-    body.appendChild(scroll);
-    body.appendChild(checks);
-    body.appendChild(bar);
+    wrap.appendChild(scroll); wrap.appendChild(perChan); wrap.appendChild(barRow);
+    body.appendChild(wrap);
+    body._sync();
   }
   function cell(tag, txt) {
     var c = el(tag, { textContent: txt });
@@ -404,6 +460,7 @@
         mountHeaderControls();
         mountWifi();
         mountValueTable();
+        mountVersionChangelog();
         installExplicitApply();
         // the page's own script may define api() slightly after us
         var tries = 0;
@@ -412,6 +469,7 @@
           mountHeaderControls();
           mountWifi();
           mountValueTable();
+        mountVersionChangelog();
           if (installExplicitApply.done || ++tries > 40) clearInterval(iv);
         }, 250);
         new MutationObserver(function (muts) {

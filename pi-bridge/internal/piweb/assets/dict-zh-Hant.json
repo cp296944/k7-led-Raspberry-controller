@@ -119,10 +119,11 @@
   "Saving…": "儲存中…",
   "Manual mode saved": "手動模式已儲存",
   "Auto": "自動",
-  "Hourly value table": "逐時數值表",
-  "Load from device": "從裝置載入",
-  "Loaded from device": "已從裝置載入",
-  "Apply to lamp": "套用到燈",
-  "Sent to lamp": "已送出到燈",
-  "Type each hour’s % per channel, then 套用.": "直接輸入每個整點各通道的 %,再按「套用到燈」。"
+  "Spectrum value table": "光譜數值表",
+  "Load from device": "從裝置讀取",
+  "Edits sync with the chart live; press ⬆ Push to send.": "編輯與上方圖表即時連動;按 ⬆ Push 才送到燈。",
+  "View release history": "查看更新歷程",
+  "Release history": "更新歷程",
+  "installed": "目前",
+  "No history available": "沒有可用的歷程"
 }
