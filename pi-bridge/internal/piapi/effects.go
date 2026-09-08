@@ -2,6 +2,7 @@ package piapi
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -60,18 +61,28 @@ func (s *EffectsStore) save() {
 	_ = os.WriteFile(s.path, append(b, '\n'), 0o644)
 }
 
-// ---- ramp: cadence control -----------------------------------------------
-// The engine already interpolates + diffs + pushes-on-change every tick, so
-// "smooth ramp" here just means a tighter tick cadence.
+// ---- ramp: the live-driver switch --------------------------------------------
+// Smooth ramp on  → the engine is the live driver: every rampOnInterval it
+//                   computes the interpolated output and pushes 0x1005 on change.
+// Smooth ramp off → the engine is dormant. /api/push writes the whole 24-slot
+//                   schedule to the lamp once (0x1007, effects pre-baked) and
+//                   the lamp runs it itself; the engine only steps in for timed
+//                   Feed/Maintenance overrides.
 const (
-	rampOnInterval  = 60 * time.Second
-	rampOffInterval = 5 * time.Minute
+	rampOnInterval  = 10 * time.Minute
+	rampOffInterval = 10 * time.Minute // housekeeping only; the engine isn't writing
 )
 
+// applyRampCadence syncs the engine's live-driving mode + tick cadence to the
+// persisted smooth-ramp state. Safe to call on startup (no lamp I/O).
 func (h *handler) applyRampCadence() {
 	h.fx.mu.Lock()
 	on := h.fx.Ramp.Active
 	h.fx.mu.Unlock()
+	if h.Engine == nil {
+		return
+	}
+	h.Engine.SetLive(on)
 	if on {
 		h.Engine.SetInterval(rampOnInterval)
 	} else {
@@ -114,6 +125,13 @@ func (h *handler) rampStop(w http.ResponseWriter, r *http.Request) {
 	h.fx.save()
 	h.fx.mu.Unlock()
 	h.applyRampCadence()
+	// Smooth ramp was the live driver; hand the lamp back its own 0x1007
+	// schedule so it keeps running a curve now that the engine went dormant.
+	if h.API != nil {
+		if err := h.API.Republish(); err != nil {
+			slog.Warn("piapi: re-arm lamp schedule on ramp stop failed", "err", err)
+		}
+	}
 	h.rampStatus(w, r)
 }
 

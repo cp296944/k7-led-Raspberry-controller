@@ -103,6 +103,10 @@ type Server struct {
 	platformName string
 	capabilities map[string]bool
 	lampGate     *sync.Mutex
+
+	writesMu     sync.Mutex
+	writesDay    string // local date the manualWrites count belongs to
+	manualWrites int    // user-initiated lamp writes today (push / hand / preview)
 }
 
 // Options configures a Server. pi-bridge injects its own identity and the full
@@ -228,6 +232,57 @@ func (s *Server) Routes() http.Handler {
 func (s *Server) client() k7tcp.Client {
 	cfg := s.Config()
 	return k7tcp.New(cfg.Host, cfg.Port, s.timeout)
+}
+
+// countManualWrite tallies a user-initiated lamp write (push / hand / preview /
+// re-arm) into today's counter, resetting at local midnight.
+func (s *Server) countManualWrite() {
+	s.writesMu.Lock()
+	defer s.writesMu.Unlock()
+	day := time.Now().Format("2006-01-02")
+	if day != s.writesDay {
+		s.writesDay, s.manualWrites = day, 0
+	}
+	s.manualWrites++
+}
+
+// ManualWritesToday returns today's user-initiated lamp-write count and the
+// local date it belongs to.
+func (s *Server) ManualWritesToday() (int, string) {
+	s.writesMu.Lock()
+	defer s.writesMu.Unlock()
+	return s.manualWrites, s.writesDay
+}
+
+// Republish re-sends the last-pushed schedule + manual state to the lamp
+// (0x1007), handing autonomous scheduling back to the lamp. Called when the
+// engine stops being the live driver (smooth ramp turned off) or a timed
+// Feed/Maintenance override ends while the engine is dormant.
+func (s *Server) Republish() error {
+	s.mu.RLock()
+	manualInts := append([]int(nil), s.state.Manual...)
+	schedInts := make([][]int, len(s.state.Schedule))
+	for i, row := range s.state.Schedule {
+		schedInts[i] = append([]int(nil), row...)
+	}
+	auto := s.state.Mode != "manual"
+	s.mu.RUnlock()
+
+	manual, err := normalizeManual(manualInts)
+	if err != nil {
+		return err
+	}
+	sched, err := normalizeSchedule(schedInts)
+	if err != nil {
+		return err
+	}
+	unlock := s.lampLock()
+	err = s.client().PushSchedule(manual, sched, auto)
+	unlock()
+	if err == nil {
+		s.countManualWrite()
+	}
+	return err
 }
 
 // lampLock serialises this server's lamp I/O with the always-on engine and the
@@ -623,6 +678,7 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, lerr.Error())
 		return
 	}
+	s.countManualWrite()
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -643,6 +699,7 @@ func (s *Server) handleHand(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, lerr.Error())
 		return
 	}
+	s.countManualWrite()
 	if err := s.saveManualState(ch); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Save state failed: %v", err))
 		return
@@ -661,6 +718,11 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 		Schedule     [][]int `json:"schedule"`
 		Mode         string  `json:"mode"`
 		ActivePreset string  `json:"active_preset"`
+		// Prebaked is set by the piapi middleware when smooth ramp is off: it has
+		// already folded every effect (acclimation, seasonal, tracked lunar,
+		// siesta, master) into the 24 rows via the engine, so this handler must
+		// send them verbatim rather than baking a second time.
+		Prebaked bool `json:"prebaked"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeError(w, http.StatusBadRequest, "Bad JSON")
@@ -680,17 +742,23 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 
 	autoMode := in.Mode != "manual"
 
-	s.mu.RLock()
-	master := s.state.MasterBrightness
-	siesta := s.state.Siesta
-	lunar := s.state.Lunar
-	s.mu.RUnlock()
-	if presetDisablesLunar(in.ActivePreset) {
-		lunar.Enabled = false
-		lunar.Active = false
+	var manualForLamp [k7tcp.Channels]uint8
+	var scheduleForLamp [k7tcp.Slots][8]uint8
+	if in.Prebaked {
+		manualForLamp, scheduleForLamp = manual, schedule
+	} else {
+		s.mu.RLock()
+		master := s.state.MasterBrightness
+		siesta := s.state.Siesta
+		lunar := s.state.Lunar
+		s.mu.RUnlock()
+		if presetDisablesLunar(in.ActivePreset) {
+			lunar.Enabled = false
+			lunar.Active = false
+		}
+		schedule = bakePCBridgeEffects(schedule, siesta, lunar)
+		manualForLamp, scheduleForLamp = applyMasterToLampState(manual, schedule, master)
 	}
-	schedule = bakePCBridgeEffects(schedule, siesta, lunar)
-	manualForLamp, scheduleForLamp := applyMasterToLampState(manual, schedule, master)
 
 	unlock := s.lampLock()
 	lerr := s.client().PushSchedule(manualForLamp, scheduleForLamp, autoMode)
@@ -699,6 +767,7 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, lerr.Error())
 		return
 	}
+	s.countManualWrite()
 	if err := s.savePushedState(manualForLamp, scheduleForLamp, autoMode, in.ActivePreset, presetDisablesLunar(in.ActivePreset)); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Save state failed: %v", err))
 		return

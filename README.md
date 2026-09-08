@@ -51,11 +51,11 @@ A Raspberry Pi has **two network interfaces**, so it sits on both at once:
 
 | | |
 |---|---|
-| **Always‑on engine on the Pi** | The full lighting engine (`arduino/src/Effects.cpp` ported to Go) runs as a systemd service: 24‑slot schedule interpolation, Smooth Ramp cadence, Feed / Maintenance timed overrides, Lunar (synodic + moonrise‑tracked), Siesta, Acclimation, Seasonal Shift — all the ESP32's runtime features, none of the ESP32 needed. |
+| **Always‑on engine on the Pi** | The full lighting engine (`arduino/src/Effects.cpp` ported to Go) runs as a systemd service: 24‑slot schedule interpolation, Feed / Maintenance timed overrides, Lunar (synodic + moonrise‑tracked), Siesta, Acclimation, Seasonal Shift — all the ESP32's runtime features, none of the ESP32 needed. **Smooth Ramp toggles whether the engine drives the lamp live (~10‑min cadence) or the lamp runs the pushed schedule on its own** while the engine stays dormant. |
 | **Over‑the‑air updates** | Tag a release on GitHub → the Pi verifies it (SHA‑256), swaps it in atomically, and self‑restarts, with automatic rollback if the new build won't stay healthy. A **"Check for updates"** button and an **Auto** toggle live in the top bar (Auto is **off** by default). Click the **version chip** for the full release history. |
 | **Traditional‑Chinese UI** | A conservative overlay translates the basic UI text (Save, Read, Push, Apply, …); proper nouns are left alone. **中/EN** switch in the top bar. |
 | **Per‑lamp profile storage** | Saved profiles are keyed by the lamp's MAC (`data/profiles/<lamp>/`) — swapping or running two lamps never mixes them, and an OTA update never touches them. Existing profiles migrate automatically. |
-| **Live spectrum value table** | A collapsible grid under the chart: type an exact % per hour per channel and the chart follows live; drag the chart and the numbers follow. Plus ±1h rotate and ±1% power nudge per channel. |
+| **Live spectrum value table** | An always‑open grid under the chart: type an exact % per hour per channel and the chart follows live; drag the chart and the numbers follow. Plus ±1h rotate and ±1% power nudge per channel. |
 | **Explicit apply** | Nothing reaches the lamp until you press **⬆ Push** — the master slider and Shift no longer auto‑write. The Push button shows a pulsing marker when there are unsent edits. |
 | **Wi‑Fi signal indicator** | Live RSSI / quality to the lamp in the top bar, colour‑coded. |
 | **Raw 8266 proxy** | `:8266` on the LAN side forwards straight to the lamp, so the desktop PC Bridge or any protocol tool can drive it through the Pi. |
@@ -103,12 +103,27 @@ scripts are **byte-for-byte upstream**. `git diff upstream/master -- pc-bridge s
 
 ### Behaviour differences the user sees
 
+- **Smooth Ramp is the "who drives the lamp" switch.** Off (default): **⬆ Push**
+  sends the whole 24-slot schedule to the lamp once (0x1007) with every effect
+  folded in as a snapshot for today — acclimation, seasonal shift, tracked
+  lunar, siesta, master — and the engine then goes dormant; the lamp runs the
+  schedule itself. On: the engine drives the lamp live, recomputing the
+  interpolated output every ~10 minutes and pushing on change. Either way a
+  Feed/Maintenance timer still works, and the lamp is handed back its own
+  schedule when the timer ends.
 - **Read** pulls the schedule from the lamp (live `readAll`) on this platform too
   — upstream only does that for `pc-bridge`.
 - **Push is explicit** — the master slider and Day-shift stage changes locally and
   only reach the lamp on **⬆ Push** (upstream auto-pushes each change).
-- **`schedule_shift_minutes`** actually rotates the 24 schedule rows on Push
-  (upstream `pc-bridge` accepts the field and ignores it).
+- **Day-shift actually moves the schedule.** `schedule_shift_minutes` rotates the
+  24 rows on Push (upstream `pc-bridge` accepts the field and ignores it), and
+  after the Push the chart re-reads so the Base view shows the rotated schedule
+  and the counter resets — no accidental double-shift.
+- **Spectrum value table** sits open under the chart (not collapsed) so the
+  drag chart and the exact %-per-hour grid are visible together.
+- **Today's lamp-write counter** in the top bar — `auto` (engine) vs `manual`
+  (your Push / Preview), reset at local midnight, so you can see how much the
+  Pi is talking to the lamp.
 - All 18 capability flags are advertised `true`, so the shared UI shows every
   control (upstream `pc-bridge` hides 9).
 
@@ -158,8 +173,9 @@ every capability as available:
   visibility toggles; **type‑exact** value entry; **Day‑shift** to slide the
   whole photoperiod
 - Manual mode with live preview
-- **Smooth Ramp** — the engine already interpolates and pushes only on change;
-  turning ramp on tightens the tick cadence to ~1 min, off relaxes it to ~5 min
+- **Smooth Ramp** — on: the Pi drives the lamp live, recomputing the
+  interpolated output every ~10 min and pushing on change. Off (default): the
+  Pi pushes the full schedule once and the lamp runs it itself
 - **Feed mode** — timed white boost, 1–100 % / 1–60 min
 - **Maintenance mode** — timed balanced inspection light, 1–100 % / 1–180 min
 - **Lunar** — royal‑blue over the 29.5‑day synodic cycle, fixed or
