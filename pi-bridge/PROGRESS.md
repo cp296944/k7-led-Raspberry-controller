@@ -170,7 +170,10 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 
 ---
 
-## Current state (2026-09-08 — pi-v0.9.10 in progress)
+## Current state (2026-09-08 — pi-v0.9.10 merged)
+
+**PR #12 merged. origin/master == origin/dev/pi-bridge == fcfc1f2. Release
+`pi-v0.9.10` published. Still 17/18 caps (setup_portal = Phase 4).**
 
 ### pi-v0.9.10 — "檢查" (Checks) panel is now a real warnings feed
 User asked what the empty "檢查" card at the bottom does. It's the shared UI's
