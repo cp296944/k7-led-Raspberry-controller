@@ -25,9 +25,9 @@ jobs:
           cache: false
       - name: Vendored k7tcp is in sync with upstream
         run: python3 tools/check_k7tcp_sync.py
-      - name: go vet (our packages only; vendored k7tcp has an upstream nit)
+      - name: go vet
         working-directory: pi-bridge
-        run: go vet ./internal/config/... ./internal/version/... ./internal/updater/...
+        run: go vet ./...
       - name: go test
         working-directory: pi-bridge
         run: go test ./...

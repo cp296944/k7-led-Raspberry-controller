@@ -1,3 +1,38 @@
+<!-- ─────────────────────────────────────────────────────────────────────────
+     FORK NOTICE — this section is the only change to this file vs upstream,
+     kept at the very top so `git merge upstream/master` stays trivial.
+     ───────────────────────────────────────────────────────────────────────── -->
+> ## 🍓 This fork adds **`pi-bridge/`** — a Raspberry Pi controller
+>
+> Upstream's ESP32 controller has to join the **lamp's own Wi-Fi AP**, which
+> strands it on the lamp's private network — unreachable from your home LAN.
+> The K7's "LAN mode" (lamp joins your router) is unreliable.
+>
+> A **Raspberry Pi has two network interfaces**, so it sits on both at once:
+> `wlan0` → the lamp's AP (rock-solid, one client), `eth0` → your home LAN.
+> `pi-bridge` runs the full always-on lighting engine on the Pi, serves the
+> **unmodified** upstream web UI to your whole LAN, proxies the raw protocol,
+> **updates itself over the air** from this repo's GitHub Releases, and adds a
+> Traditional-Chinese UI overlay + per-lamp profile storage.
+>
+> **Goal: 1:1 feature parity with the ESP32 firmware** — all 18 capability
+> flags the shared UI checks, implemented on the Pi.
+>
+> → **[`pi-bridge/README.md`](pi-bridge/README.md)** ·
+> **[design](pi-bridge/docs/DESIGN.md)** ·
+> **[plan](pi-bridge/docs/PLAN.md)** ·
+> **[live progress](pi-bridge/PROGRESS.md)**
+>
+> ```bash
+> # on a Raspberry Pi (Debian arm64), from a checkout:
+> sudo pi-bridge/deploy/install.sh
+> # then open  http://<pi-hostname>/  from any device on your LAN
+> ```
+>
+> Everything below is upstream's original README, unchanged.
+
+---
+
 # K7 LED Controller
 
 An unofficial web-based controller for **Noo-Psyche K7 Mini** and **K7 Pro** LED aquarium lamps.

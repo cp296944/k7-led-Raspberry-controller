@@ -99,14 +99,31 @@ Candidate upstream PR: `net.JoinHostPort` in k7tcp connect().
   #5 Base/Effective Today/Play-day chart modes (Effective needs Phase 3 overlays)
 
 ### Phase 3 — Always-on engine  (tags `pi-v0.5`..`0.9`)  ← the big port of Effects.cpp + Moon.cpp
-- [ ] v0.4 `persistent_controller_clock` + `/api/time` + `logs` + scheduler tick + `/api/output/status` + `/api/wifi/signal`
-- [ ] v0.5 `smooth_ramp` (`/api/ramp/*`) — default OFF, push-on-change, ≥2min
-- [ ] v0.6 `feed_mode` + `maintenance_mode` (`/api/feed/*`, `/api/maintenance/*`)
-- [ ] v0.7 `tracked_lunar` (moon phase 22.63N 120.30E, extends `/api/lunar/*`)
-- [ ] v0.8 `acclimation` (`/api/acclimation/*`)
-- [ ] v0.9 `seasonal_daylength` (`/api/seasonal/*`)
-- [ ] golden-vector tests vs ESP32 `/api/output/status` for the engine
+- [x] **v0.5.0** `persistent_controller_clock` + `logs` + engine tick + `/api/time` + `/api/output/status` + `/api/wifi/signal` + `/api/logs`  → **11/18**
+  - `internal/engine/model.go` — PURE port of Effects.cpp math: interpolate,
+    EffectiveSchedule (seasonal+UI shift resample + acclimation scale),
+    applySiesta/applyMaster/applyLunar, LunarWindow + clampWindowToNight,
+    Compute() = restoreScheduledOutputNow. `moon.go` = Moon.cpp. 8 golden tests.
+  - `internal/engine/engine.go` — tick loop (60s + Kick on push/master), diffs
+    vs lastSent, `Hand()` on change, tracks OutputStatus. Override hook (feed/maint).
+  - `internal/lamp` — single mutexed connection owner, generous timeouts, Health()
+  - `internal/ringlog` — bounded log + slog.Handler wrapper
+  - `internal/piapi` — middleware: the 4 new endpoints + engine.Provider (reads
+    httpapi StateSnapshot). Kicks engine on /api/push, /api/master.
+  - vendored httpapi getters added: StateSnapshot(), Device()
+  - verified vs mock: push schedule → engine kicked → output `[50,30,...]` sent within 2s
+- [ ] v0.6.0 `smooth_ramp` (`/api/ramp/start|stop|status|tick`) — default OFF, engine interval → 2min when active, push-on-change
+- [ ] v0.7.0 `feed_mode` + `maintenance_mode` (`/api/feed/*`, `/api/maintenance/*`) — timed engine.Override; buildMaintenanceChannels (MINI/PRO tables in Effects.cpp:79)
+- [ ] v0.8.0 `tracked_lunar` — flip flag; LunarWindow already ports trackMoonrise. Add `/api/lunar/*` to piapi? (fixed lunar is in vendored httpapi; tracked just needs the cap on + engine already does moon math)
+- [ ] v0.9.0 `acclimation` (`/api/acclimation/config|status`) + `seasonal_daylength` (`/api/seasonal/config|status`) — piapi gets its own small JSON store for these 2 configs; engine.Config already has the fields + math
+- [ ] golden-vector tests vs ESP32 `/api/output/status` (needs the ESP32 powered + on the lamp AP — user's bench unit)
 - [ ] **exit gate:** 17/18 caps, UI shows every control, all work
+
+NOTE for v0.6-0.9: piapi already has the Provider + engine wiring. Each tag =
+add endpoint handlers to piapi + flip the cap in main.go + (for accl/seasonal)
+a tiny config store. engine.Config fields + math are ALL already there.
+NOTE: `internal/lamp` gate is used by engine + proxy; vendored httpapi still
+opens its own per-call conns (brief, low collision risk). Unify if it bites.
 
 ### Phase 4 — Setup page + hardening  (tag `pi-v1.0`)
 - [ ] `setup_portal` equivalent (lamp SSID/IP settings page, wifi status, factory reset)
@@ -121,7 +138,46 @@ Candidate upstream PR: `net.JoinHostPort` in k7tcp connect().
 - [ ] `homeassistant/k7_lamp/` custom integration (light, 6×number, switch, select, buttons, binary_sensor, sensor)
 - [ ] install into `D:\HomeAssistant\custom_components\k7_lamp\`
 
+### User-requested features (queue — slot into a tag when reached)
+- [x] UX-1 (pi-v0.5.1): move 檢查更新 + language INTO the `.topbar` (after versionChip);
+  language is a `<select>` dropdown (LANGS array, easy to add locales). Removes
+  the bottom-right floating bar.
+- [x] UX-2 (pi-v0.5.1): Shift discoverability — overlay overrides `changeShift`
+  to jump the chart to "Effective Today" + toast "按 Push 生效". (Shift math
+  already works: `/api/push` with `schedule_shift_minutes` → piweb rotates the
+  24 rows. Verified on Pi: +6h moved an 08-16 band to 14-22.) Root cause of
+  "光譜不會移動": upstream Base chart mode never renders the shift, and
+  explicit-apply (pi-v0.4.1, user-requested) means it needs a Push.
+- [ ] **FEAT-A: manual hourly value table** — a "逐時數值表" like the user's own
+  `D:\HomeAssistant\K7\K7_QR_Generator\k7profilegeneratoroffline.html`: an
+  editable 24-row × 6-channel number grid (type exact %), plus that tool's
+  "整體位移工具" (rotate curve ±1h per checked channel, power ±1%). The shared
+  UI only has drag-to-edit. Approach: overlay.js injects a collapsible panel
+  under the chart that reads/writes the page's schedule via a small bridge
+  (needs a hook — `scheduleBase` is a `let`, so add a getter/setter through
+  `window` or drive it via `updateChart` + a synthetic drag, OR simplest:
+  the panel POSTs its own grid straight to `/api/push`). Target: pi-v0.6.x or
+  a dedicated pi-v0.10.
+- [ ] **FEAT-B: move working dir** `D:\HomeAssistant\K7\k7-led-controller` →
+  `D:\HomeAssistant\K7\K7_Pi_Wifi_Controller`. Must also update: this file's
+  "Hard rules" path, the scheduled task prompt
+  (`k7-pi-bridge-build-resume/SKILL.md`), `_archive` copy path, any absolute
+  paths in scripts. Do at a clean checkpoint (all committed), not mid-feature.
+
 ---
+
+## Current state (2026-09-08)
+- **PR #1 MERGED** (Phases 0–2.5). Phase 3 work → PR #2 on `dev/pi-bridge`
+  (also carries the pi-v0.4.1 UX fix until merged).
+- **Pi is running `pi-v0.5.0`** — always-on engine LIVE (tick loop driving the real K7 Pro).
+- REAL wlan0 signal measured: RSSI -73 dBm / 54% / 24 Mbps (Pi far from tank; engine copes, last_write_ok true). User will move the Pi closer later.
+- Releases: pi-v0.1.0 … pi-v0.5.0. Capabilities: **11 / 18**.
+- master branch protected: no force-push, no deletion (no review requirement).
+- pi-v0.4.1: explicit-apply — overlay.js neuters upstream's auto-push; master/
+  shift/mode edits stay local until the user presses ⬆ Push (dirty indicator).
+- Real lamp verified: MAC `4a:55:19:ec:b0:49`, profiles migrated to
+  `data/profiles/mac-4a_55_19_ec_b0_49/` (user's `BRS_AB`, `K7_Pro42113`).
+- User confirmed the UI renders + works in a browser.
 
 ## BLOCKED
 _(none)_

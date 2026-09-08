@@ -105,5 +105,17 @@
   "Up to date": "已是最新版",
   "Update available": "有可用更新",
   "Current version": "目前版本",
-  "Restarting…": "重新啟動中…"
+  "Restarting…": "重新啟動中…",
+  "Changes staged — press Push to send to the lamp": "改動已暫存,按「⬆ Push」才會同步到燈",
+  "Shift preview — press Push to apply to the lamp": "時段平移:圖表已切到「今日實際」預覽,按 ⬆ Push 才會套用到燈",
+  "Check for updates": "檢查更新",
+  "Language / 語言": "語言",
+  "⬆ Push": "⬆ 推送",
+  "⬆ Apply": "⬆ 套用",
+  "Push": "推送",
+  "Pushing…": "推送中…",
+  "Pushed successfully": "已成功推送",
+  "Reading…": "讀取中…",
+  "Saving…": "儲存中…",
+  "Manual mode saved": "手動模式已儲存"
 }
