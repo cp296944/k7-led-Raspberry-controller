@@ -175,14 +175,29 @@
       var om = window.onModeToggle;
       window.onModeToggle = function () { var r = om.apply(this, arguments); setDirty(true); return r; };
     }
-    // "Shift" only affects the *Effective Today* view and the push — Base mode
-    // never moves. Make that visible: on shift, jump to Effective + explain.
+    // ── Shift fix ──────────────────────────────────────────────────────────
+    // Upstream's "Effective Today" curve applies seasonal shift, siesta and
+    // lunar — but NOT the manual "時段平移" (dayShift). So +2h and +4h render
+    // identically. We wrap chartEffectiveValueAtMins to also rotate the lookup
+    // by the current shift (read from the #shiftVal label), matching the
+    // server-side row rotation piweb does on /api/push.
+    if (typeof window.chartEffectiveValueAtMins === 'function' && !window.chartEffectiveValueAtMins._k7pi) {
+      var oCEV = window.chartEffectiveValueAtMins;
+      window.chartEffectiveValueAtMins = function (mins, ci) {
+        var lbl = document.getElementById('shiftVal');
+        var sh = lbl ? (parseInt(lbl.textContent, 10) || 0) : 0; // "+2h" -> 2
+        var w = window._wrapMins || function (m) { return ((m % 1440) + 1440) % 1440; };
+        return oCEV(w(mins - sh * 60), ci);
+      };
+      window.chartEffectiveValueAtMins._k7pi = true;
+    }
     if (typeof window.changeShift === 'function' && !window.changeShift._k7pi) {
       var ocs = window.changeShift;
       window.changeShift = function () {
         var r = ocs.apply(this, arguments);
         try {
           if (typeof window.setChartMode === 'function') window.setChartMode('effective');
+          else if (typeof window.updateChart === 'function') window.updateChart();
         } catch (e) {}
         setDirty(true);
         toast(dict['Shift preview — press Push to apply to the lamp'] ||
