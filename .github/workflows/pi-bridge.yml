@@ -1,0 +1,83 @@
+name: pi-bridge
+
+on:
+  push:
+    branches: [master, dev/pi-bridge]
+    tags: ['pi-v*']
+  pull_request:
+    paths:
+      - 'pi-bridge/**'
+      - 'tools/check_k7tcp_sync.py'
+      - '.github/workflows/pi-bridge.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to publish the release on a pi-v* tag
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: pi-bridge/go.mod
+          cache: false
+      - name: Vendored k7tcp is in sync with upstream
+        run: python3 tools/check_k7tcp_sync.py
+      - name: go vet (our packages only; vendored k7tcp has an upstream nit)
+        working-directory: pi-bridge
+        run: go vet ./internal/config/... ./internal/version/... ./internal/updater/...
+      - name: go test
+        working-directory: pi-bridge
+        run: go test ./...
+      - name: build (host + linux/arm64)
+        working-directory: pi-bridge
+        run: |
+          go build ./...
+          GOOS=linux GOARCH=arm64 go build ./cmd/k7-pi-bridge
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/pi-v')
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: pi-bridge/go.mod
+
+      - name: Build linux/arm64 release binary
+        working-directory: pi-bridge
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: arm64
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          COMMIT="$(git rev-parse --short HEAD)"
+          DATE="$(date -u +%Y-%m-%d)"
+          PKG="github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/version"
+          mkdir -p ../dist
+          go build -trimpath \
+            -ldflags "-s -w -X ${PKG}.Version=${TAG} -X ${PKG}.Commit=${COMMIT} -X ${PKG}.Date=${DATE}" \
+            -o ../dist/k7-pi-bridge-linux-arm64 ./cmd/k7-pi-bridge
+
+      - name: Checksums + manifest
+        working-directory: dist
+        run: |
+          sha256sum k7-pi-bridge-linux-arm64 > SHA256SUMS
+          cat SHA256SUMS
+          printf '{"version":"%s","commit":"%s","date":"%s","asset":"k7-pi-bridge-linux-arm64"}\n' \
+            "${GITHUB_REF_NAME}" "$(git -C .. rev-parse --short HEAD)" "$(date -u +%Y-%m-%d)" > version.json
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PRERELEASE=""
+          case "${GITHUB_REF_NAME}" in *-rc*|*-beta*|*-alpha*) PRERELEASE="--prerelease";; esac
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/k7-pi-bridge-linux-arm64 dist/SHA256SUMS dist/version.json \
+            --title "pi-bridge ${GITHUB_REF_NAME}" \
+            --generate-notes ${PRERELEASE}

@@ -1,0 +1,7 @@
+[Unit]
+Description=K7 Pi Bridge - roll back to the previous release after a failed update
+Documentation=https://github.com/cp296944/k7-led-Raspberry-controller/tree/master/pi-bridge
+
+[Service]
+Type=oneshot
+ExecStart=/opt/k7-pi-bridge/rollback.sh
