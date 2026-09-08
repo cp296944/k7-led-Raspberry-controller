@@ -164,18 +164,26 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 
 ---
 
-## Current state (2026-09-08)
-- **PR #1 + #2 MERGED. PR #3 open** on `dev/pi-bridge` (Phase 3 v0.6–0.9 + v0.5.2–0.5.5).
-- **Pi is running `pi-v0.5.5`** — always-on engine LIVE driving the real K7 Pro.
-  auto_update is OFF (default) — future versions apply only via the UI button.
-- Releases: pi-v0.1.0 … pi-v0.5.5. Capabilities: **11 / 18**.
-- REAL wlan0: RSSI ~-74 dBm / ~52%. wlan0 never-default hardening applied (NM
-  dispatcher, reboot-persistent). Pi far from tank; engine copes. User relocates later.
-- master branch protected: no force-push / no deletion (no review requirement).
-- README.md has a top-of-file fork banner (only diff vs upstream — trivial merges).
-- **D — golden-vector-vs-real-ESP32: DROPPED** (user call). Unit golden tests +
-  careful port are enough; the 7-day soak is the real proof.
-- Working dir renamed to `K7_Pi_Wifi_Controller`; ESP32 flash scripts → `..\esp32-flash-experiment\`.
+## Current state (2026-09-08 — end of session)
+- **All merged to master through PR #4.** Pi running `pi-v0.9.0`.
+- **Capabilities: 17 / 18** — only `setup_portal` left (Phase 4).
+- The always-on engine drives the real K7 Pro 24/7: schedule interpolation,
+  smooth-ramp cadence, feed/maintenance timed overrides, tracked lunar,
+  acclimation, seasonal shift. Feed was verified changing the physical lamp.
+- auto_update OFF by default (manual via the UI button). wlan0 never-default
+  hardened (NM dispatcher, reboot-persistent). Weak signal (~-74 dBm) — user
+  relocates the Pi to the tank later.
+- master protected (no force-push / deletion). README fork banner is the only
+  diff vs upstream. **D (golden-vs-ESP32) DROPPED** per user.
+- Working dir: `D:\HomeAssistant\K7\K7_Pi_Wifi_Controller`; ESP32 flash scripts
+  in `..\esp32-flash-experiment\`. Scheduled resume task: OFF (user disabled).
+
+### NEXT (when the user says go): Phase 4 = `pi-v1.0.0` → 18/18
+- `setup_portal` cap + a settings page: lamp host/port, wifi status, factory
+  reset, update channel, lat/lon, timezone
+- `/api/warnings/status` real warnings feed + a diagnostics view
+- 7-day unattended soak (no lamp hammering, clean reconnects, no mem growth)
+- then Phase 5 = HA (`pi-v1.1`): `/api/ha/*` REST + `custom_components/k7_lamp/`
 
 ### Phase 3 — v0.6-0.9 ✅ DONE (tag `pi-v0.9.0`) → **17/18**
 - `internal/piapi/effects.go` — EffectsStore (data/effects.json) + all endpoints:
