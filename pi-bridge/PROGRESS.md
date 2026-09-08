@@ -143,8 +143,9 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 ## Current state (2026-09-08)
 - **PR #1 MERGED** (Phases 0–2.5). Phase 3 work → PR #2 on `dev/pi-bridge`
   (also carries the pi-v0.4.1 UX fix until merged).
-- **Pi is running `pi-v0.4.1`** (systemd service, :80 + proxy :8266).
-- Releases: pi-v0.1.0 … pi-v0.4.1. Capabilities: **9 / 18**.
+- **Pi is running `pi-v0.5.0`** — always-on engine LIVE (tick loop driving the real K7 Pro).
+- REAL wlan0 signal measured: RSSI -73 dBm / 54% / 24 Mbps (Pi far from tank; engine copes, last_write_ok true). User will move the Pi closer later.
+- Releases: pi-v0.1.0 … pi-v0.5.0. Capabilities: **11 / 18**.
 - master branch protected: no force-push, no deletion (no review requirement).
 - pi-v0.4.1: explicit-apply — overlay.js neuters upstream's auto-push; master/
   shift/mode edits stay local until the user presses ⬆ Push (dirty indicator).
