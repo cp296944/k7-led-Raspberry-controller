@@ -170,6 +170,19 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 
 ---
 
+## Current state (2026-09-09 — pi-v1.0.4 merged, PR #17; == origin/master a389395)
+
+**Releases pi-v1.0.2 … pi-v1.0.4 all published. 18/18. Pi still on pi-v1.0.1
+until the user OTAs — then: 📊 monitor, "✓ no issues" Checks, daily+reconnect
+clock sync + drift check, model auto-detect, ⚙ ramp cadence, OEM presets,
+faster ReadAll, one process clock.**
+
+### NEXT
+- User OTAs to pi-v1.0.4, relocates the Pi, runs the 7-day soak
+  (`/api/diag` now has CPU/RAM/temp/disk; soak.log has them too).
+- **Phase 5 — Home Assistant** (`pi-v1.1`): `/api/ha/*` + `custom_components/
+  k7_lamp/` → `D:\HomeAssistant\custom_components\`. DESIGN.md §7.
+
 ## Current state (2026-09-09 — pi-v1.0.4 in progress)
 
 ### pi-v1.0.4 — in-UI system monitor + non-empty "Checks"
