@@ -130,3 +130,34 @@ func TestTimezonePinnedForLampClock(t *testing.T) {
 		t.Error(`resolveTimezone("") should report not-ok`)
 	}
 }
+
+func TestScheduleHelpers(t *testing.T) {
+	zero := make([][]int, 24)
+	for i := range zero {
+		zero[i] = []int{i, 0, 0, 0, 0, 0, 0, 0}
+	}
+	if !scheduleAllZero(zero) {
+		t.Error("all-zero schedule not detected")
+	}
+	zero[12][4] = 30
+	if scheduleAllZero(zero) {
+		t.Error("non-zero schedule reported as all-zero")
+	}
+
+	var lamp [24][8]int
+	for h := 0; h < 24; h++ {
+		lamp[h] = [8]int{h, 0, 0, 0, 30, 0, 0, 0} // matches zero after the edit above (col 4 = 30 at h12? no)
+	}
+	if schedulesEqual(zero, lamp) {
+		t.Error("different schedules reported equal")
+	}
+	// make them match on channels 2..7
+	for h := 0; h < 24; h++ {
+		for c := 2; c < 8; c++ {
+			lamp[h][c] = zero[h][c]
+		}
+	}
+	if !schedulesEqual(zero, lamp) {
+		t.Error("matching schedules reported unequal")
+	}
+}

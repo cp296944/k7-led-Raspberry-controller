@@ -21,8 +21,9 @@ type EffectsStore struct {
 	mu   sync.Mutex
 
 	Ramp struct {
-		Active  bool `json:"active"`
-		Consent bool `json:"consent"`
+		Active     bool `json:"active"`
+		Consent    bool `json:"consent"`
+		IntervalMin int `json:"interval_min"` // send cadence when ramp on; 0 = default
 	} `json:"ramp"`
 	Feed struct {
 		DurationMins int `json:"duration"`
@@ -69,22 +70,32 @@ func (s *EffectsStore) save() {
 //                   the lamp runs it itself; the engine only steps in for timed
 //                   Feed/Maintenance overrides.
 const (
-	rampOnInterval  = 10 * time.Minute
+	rampDefaultMin  = 10               // send cadence when smooth ramp is on
 	rampOffInterval = 10 * time.Minute // housekeeping only; the engine isn't writing
+	rampMinMin      = 2
+	rampMaxMin      = 60
 )
+
+func rampIntervalMin(v int) int {
+	if v <= 0 {
+		return rampDefaultMin
+	}
+	return clampi(v, rampMinMin, rampMaxMin)
+}
 
 // applyRampCadence syncs the engine's live-driving mode + tick cadence to the
 // persisted smooth-ramp state. Safe to call on startup (no lamp I/O).
 func (h *handler) applyRampCadence() {
 	h.fx.mu.Lock()
 	on := h.fx.Ramp.Active
+	every := rampIntervalMin(h.fx.Ramp.IntervalMin)
 	h.fx.mu.Unlock()
 	if h.Engine == nil {
 		return
 	}
 	h.Engine.SetLive(on)
 	if on {
-		h.Engine.SetInterval(rampOnInterval)
+		h.Engine.SetInterval(time.Duration(every) * time.Minute)
 	} else {
 		h.Engine.SetInterval(rampOffInterval)
 	}
@@ -93,13 +104,31 @@ func (h *handler) applyRampCadence() {
 func (h *handler) rampStatus(w http.ResponseWriter, r *http.Request) {
 	h.fx.mu.Lock()
 	st := map[string]any{
-		"active":     h.fx.Ramp.Active,
-		"consent":    h.fx.Ramp.Consent,
-		"last_tick":  h.Engine.LastPush().Unix(),
-		"interval_s": int(h.Engine.Interval().Seconds()),
+		"active":       h.fx.Ramp.Active,
+		"consent":      h.fx.Ramp.Consent,
+		"last_tick":    h.Engine.LastPush().Unix(),
+		"interval_s":   int(h.Engine.Interval().Seconds()),
+		"interval_min": rampIntervalMin(h.fx.Ramp.IntervalMin),
 	}
 	h.fx.mu.Unlock()
 	writeJSON(w, http.StatusOK, st)
+}
+
+// rampConfig sets the smooth-ramp send cadence (minutes) without toggling it.
+func (h *handler) rampConfig(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		IntervalMin int `json:"interval_min"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bad JSON"})
+		return
+	}
+	h.fx.mu.Lock()
+	h.fx.Ramp.IntervalMin = clampi(in.IntervalMin, rampMinMin, rampMaxMin)
+	h.fx.save()
+	h.fx.mu.Unlock()
+	h.applyRampCadence()
+	h.rampStatus(w, r)
 }
 
 func (h *handler) rampStart(w http.ResponseWriter, r *http.Request) {

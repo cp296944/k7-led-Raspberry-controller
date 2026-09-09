@@ -162,3 +162,15 @@ func TestOverrideEndReArmsScheduleWhenDormant(t *testing.T) {
 		t.Errorf("re-arm should fire only on the transition, got %d", reArmed)
 	}
 }
+
+func TestUntilNextDaily(t *testing.T) {
+	d := untilNextDaily(4, time.UTC)
+	if d <= 0 || d > 24*time.Hour {
+		t.Errorf("untilNextDaily(4) = %v, want (0, 24h]", d)
+	}
+	// the target is exactly 04:00 UTC
+	target := time.Now().In(time.UTC).Add(d)
+	if target.Hour() != 4 || target.Minute() != 0 {
+		t.Errorf("next daily lands at %02d:%02d, want 04:00", target.Hour(), target.Minute())
+	}
+}

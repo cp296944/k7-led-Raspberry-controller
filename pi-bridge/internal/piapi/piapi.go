@@ -82,6 +82,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.rampStop(w, r)
 	case "/api/ramp/tick":
 		h.rampTick(w, r)
+	case "/api/ramp/config":
+		h.rampConfig(w, r)
 
 	case "/api/feed/status":
 		h.feedStatus(w, r)
