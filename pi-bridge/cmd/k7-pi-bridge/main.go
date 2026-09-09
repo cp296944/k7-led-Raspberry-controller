@@ -137,6 +137,32 @@ func run(args []string) error {
 	// ends, hand the lamp back its own 0x1007 schedule.
 	eng.SetRepushFn(api.Republish)
 	eng.SetTally(writeTally)
+	// After the daily time-sync (and after a reconnect), check the lamp still
+	// holds the schedule we last pushed and re-push if it drifted — but never
+	// push a blank schedule over a real one.
+	eng.SetDriftCheck(func() bool {
+		st := api.StateSnapshot()
+		if st.LastPushedAt == "" || scheduleAllZero(st.Schedule) {
+			return false
+		}
+		lampState, err := lampConn.ReadAll()
+		if err != nil {
+			slog.Warn("drift check: lamp read failed", "err", err)
+			return false
+		}
+		if schedulesEqual(st.Schedule, lampState.Schedule) {
+			return false
+		}
+		slog.Info("drift check: lamp schedule differs from last push — re-pushing")
+		if err := api.Republish(); err != nil {
+			slog.Warn("drift check: re-push failed", "err", err)
+			return false
+		}
+		return true
+	})
+	// A lamp power-cycle drops the link; when it comes back, re-sync the clock
+	// (+ drift check) immediately instead of waiting for the daily pass.
+	lampConn.SetOnReconnect(eng.MaintNow)
 	// Persisted smooth-ramp state decides whether the engine drives live; piapi
 	// re-asserts this in Wrap(), this just avoids a momentary wrong mode on boot.
 	eng.SetLive(fx.Ramp.Active)
@@ -214,6 +240,36 @@ func run(args []string) error {
 	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutCtx)
+}
+
+// schedulesEqual compares the 6 channel columns (2..7) of the stored 24-row
+// schedule against the lamp's decoded one; hour/minute columns are ignored.
+func schedulesEqual(want [][]int, got [24][8]int) bool {
+	if len(want) != 24 {
+		return false
+	}
+	for h := 0; h < 24; h++ {
+		if len(want[h]) < 8 {
+			return false
+		}
+		for c := 2; c < 8; c++ {
+			if want[h][c] != got[h][c] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func scheduleAllZero(s [][]int) bool {
+	for _, row := range s {
+		for c := 2; c < len(row); c++ {
+			if row[c] != 0 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // resolveTimezone returns the configured zone (and true) or time.Local (and

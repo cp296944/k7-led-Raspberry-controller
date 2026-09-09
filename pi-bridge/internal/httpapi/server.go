@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -34,7 +35,7 @@ import (
 	"github.com/cp296944/k7-led-Raspberry-controller/pi-bridge/internal/tally"
 )
 
-//go:embed static/*.html static/vendor/* diagnostic/*.html presets.json
+//go:embed static/*.html static/vendor/* diagnostic/*.html presets.json presets-oem.json
 var staticFiles embed.FS
 
 type Config struct {
@@ -552,6 +553,24 @@ func (s *Server) handlePresets(w http.ResponseWriter, r *http.Request) {
 	payload, ok := catalog[device]
 	if !ok {
 		payload = catalog["k7mini"]
+		device = "k7mini"
+	}
+
+	// Merge the transcribed Noo-Psyche factory curves (preset:oem-*), so users
+	// have a starting point identical to the OEM app.
+	if oemRaw, e := staticFiles.ReadFile("presets-oem.json"); e == nil {
+		var oem map[string]map[string]json.RawMessage
+		if json.Unmarshal(oemRaw, &oem) == nil {
+			var cur map[string]json.RawMessage
+			if json.Unmarshal(payload, &cur) == nil {
+				for k, v := range oem[device] {
+					cur[k] = v
+				}
+				if merged, e := json.Marshal(cur); e == nil {
+					payload = merged
+				}
+			}
+		}
 	}
 	writeRawJSON(w, http.StatusOK, payload)
 }
@@ -941,8 +960,30 @@ func (s *Server) saveStateFromLamp(lamp k7tcp.LampState, read bool, pushed bool)
 		state.LastPushedAt = s.state.LastPushedAt
 	}
 	s.state = state
+	// The lamp's own name tells us the model (k7m… = Mini/3ch, k7_/k7p… =
+	// Pro/6ch). Auto-correct a wrong config.Device so presets + channel
+	// semantics match the hardware. (OEM app keys off the same prefix.)
+	if dev := deviceFromLampName(lamp.Name); dev != "" && dev != s.config.Device {
+		slog.Info("lamp reports a different model than config — correcting",
+			"lamp_name", lamp.Name, "was", s.config.Device, "now", dev)
+		s.config.Device = dev
+	}
 	s.mu.Unlock()
 	return s.saveStore()
+}
+
+// deviceFromLampName maps a lamp's advertised name to "k7mini" / "k7pro", or ""
+// if it doesn't look like a K7.
+func deviceFromLampName(name string) string {
+	n := strings.ToLower(strings.TrimSpace(name))
+	switch {
+	case strings.HasPrefix(n, "k7m"):
+		return "k7mini"
+	case strings.HasPrefix(n, "k7_"), strings.HasPrefix(n, "k7p"), strings.HasPrefix(n, "k7pro"):
+		return "k7pro"
+	default:
+		return ""
+	}
 }
 
 func (s *Server) saveManualState(ch [k7tcp.Channels]uint8) error {

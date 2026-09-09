@@ -152,6 +152,19 @@ scripts are **byte-for-byte upstream**. `git diff upstream/master -- pc-bridge s
   startup, so the wall time the engine schedules against and the H:M:S bundled
   into every lamp `SyncTime` / `PushSchedule` always agree (a stock headless Pi
   OS is UTC; the "Checks" panel warns if the OS zone still disagrees).
+- **Lamp clock upkeep** — every ⬆ Push bundles the time; on top of that the
+  engine re-syncs the clock **once a day at ~04:00** and **immediately after the
+  lamp link recovers** (a power-cycled lamp gets its clock back in seconds). The
+  daily pass also reads the lamp's stored schedule and **re-pushes if it drifted**
+  from what pi-bridge last sent (never a blank schedule over a real one).
+- **Model auto-detect** — the lamp's own name (`k7_…` / `k7m…`) sets K7 Pro
+  (6-channel) vs K7 Mini (3-channel) on every Read; a wrong `device` in config is
+  corrected automatically.
+- **Configurable Smooth Ramp cadence** — the ⚙ settings page has a "send every
+  N minutes" field (2–60, default 10) for when Smooth Ramp is on.
+- **OEM factory curves** — `preset:oem-sps` / `-lps` / `-sl` are the Noo-Psyche
+  app's built-in "Factory Settings" schedules, transcribed from the APK, for a
+  known-good starting point.
 - All 18 capability flags are advertised `true`, so the shared UI shows every
   control (upstream `pc-bridge` hides 9).
 
@@ -233,6 +246,15 @@ Upstream setup and flashing guides:
 
 - The lamp accepts one TCP connection at a time and has no locking; the engine,
   the web API and the proxy share a single mutex so they never collide.
+- **Threat model.** The K7 protocol on `:8266` is **unauthenticated plaintext** —
+  anyone who can open a socket to the lamp has full control (this is the vendor
+  design, not something the bridge adds). The bridge's own HTTP API and the raw
+  `:8266` proxy also carry no auth. On a normal home LAN behind a router that's
+  the same exposure the OEM app has; **do not port‑forward `:80` or `:8266` to
+  the internet.** If you must reach the bridge off‑box, put it behind your own
+  authenticated reverse proxy / VPN. The bridge never *writes* the lamp's Wi‑Fi
+  credentials and keeps `wlan0` `never-default`, so a compromised bridge can't
+  pivot onto your LAN through the lamp link.
 - The Noo‑Psyche lamp firmware is closed, so we can't verify how it manages
   flash write‑wear for the continuous luminance commands. Smooth Ramp writes
   more often — it's **off by default** here for that reason.

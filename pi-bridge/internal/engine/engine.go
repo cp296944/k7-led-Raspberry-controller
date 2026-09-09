@@ -76,8 +76,14 @@ type Engine struct {
 	// shared, restart-surviving lamp-write tally; the engine bumps the auto side.
 	tally *tally.Counter
 
+	// driftCheck, when set, is run after each maintenance-pass time sync: it
+	// reads the lamp's stored schedule, compares it to what pi-bridge expects,
+	// and re-pushes if they differ. Returns true if it re-pushed. Set by main.
+	driftCheck func() bool
+
 	tickNow  chan struct{}
 	reticker chan struct{}
+	maintNow chan struct{} // fire a time-sync (+ drift check) now
 }
 
 func New(prov Provider, l Lamp, tz *time.Location, interval time.Duration) *Engine {
@@ -91,6 +97,7 @@ func New(prov Provider, l Lamp, tz *time.Location, interval time.Duration) *Engi
 		prov: prov, lamp: l, tz: tz, interval: interval,
 		tickNow:  make(chan struct{}, 1),
 		reticker: make(chan struct{}, 1),
+		maintNow: make(chan struct{}, 1),
 	}
 }
 
@@ -166,6 +173,24 @@ func (e *Engine) SetRepushFn(fn func() error) {
 	e.mu.Unlock()
 }
 
+// SetDriftCheck wires the post-time-sync "does the lamp still hold the schedule
+// we expect" check.
+func (e *Engine) SetDriftCheck(fn func() bool) {
+	e.mu.Lock()
+	e.driftCheck = fn
+	e.mu.Unlock()
+}
+
+// MaintNow triggers a lamp time-sync (+ drift check) as soon as the tick loop
+// can — used when the lamp link recovers, so a power-cycled lamp gets its clock
+// back within seconds instead of at the next daily pass.
+func (e *Engine) MaintNow() {
+	select {
+	case e.maintNow <- struct{}{}:
+	default:
+	}
+}
+
 // SetTally wires the shared restart-surviving lamp-write counter.
 func (e *Engine) SetTally(t *tally.Counter) {
 	e.mu.Lock()
@@ -202,13 +227,16 @@ func ClockSane() bool { return time.Now().Unix() > 1700000000 }
 func (e *Engine) Run(ctx context.Context) {
 	slog.Info("engine started", "interval", e.interval, "tz", e.tz.String())
 	// prime the lamp clock, then tick
-	_ = e.lamp.SyncTime()
+	e.maintenance()
 	e.step()
 
 	t := time.NewTicker(e.Interval())
 	defer t.Stop()
-	daily := time.NewTicker(6 * time.Hour)
-	defer daily.Stop()
+	// One clock re-sync (+ drift check) a day, at ~04:00 local — the tank is
+	// dark and nobody's watching. /api/push already bundles the time, and
+	// MaintNow() handles a lamp reconnect, so this is just a slow drift guard.
+	mt := time.NewTimer(untilNextDaily(4, e.tz))
+	defer mt.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -219,10 +247,39 @@ func (e *Engine) Run(ctx context.Context) {
 			e.step()
 		case <-e.reticker:
 			t.Reset(e.Interval())
-		case <-daily.C:
-			_ = e.lamp.SyncTime()
+		case <-mt.C:
+			e.maintenance()
+			mt.Reset(untilNextDaily(4, e.tz))
+		case <-e.maintNow:
+			e.maintenance()
 		}
 	}
+}
+
+// maintenance re-syncs the lamp clock, then (if wired) checks the lamp still
+// holds the schedule pi-bridge expects and re-pushes if it drifted.
+func (e *Engine) maintenance() {
+	if err := e.lamp.SyncTime(); err != nil {
+		slog.Warn("engine: lamp time sync failed", "err", err)
+		return
+	}
+	slog.Debug("engine: lamp clock synced")
+	e.mu.Lock()
+	dc := e.driftCheck
+	e.mu.Unlock()
+	if dc != nil && dc() {
+		slog.Info("engine: lamp schedule had drifted from expected — re-pushed")
+	}
+}
+
+// untilNextDaily returns the duration to the next occurrence of `hour`:00 local.
+func untilNextDaily(hour int, tz *time.Location) time.Duration {
+	now := time.Now().In(tz)
+	next := time.Date(now.Year(), now.Month(), now.Day(), hour, 0, 0, 0, tz)
+	if !next.After(now) {
+		next = next.AddDate(0, 0, 1)
+	}
+	return time.Until(next)
 }
 
 func (e *Engine) step() {

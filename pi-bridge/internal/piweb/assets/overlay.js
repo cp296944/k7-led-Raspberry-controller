@@ -199,6 +199,13 @@
       field(L('Channel') || 'Channel', chSel);
       note(L('Current') + ': ' + d.update.current + '  ·  ' + d.update.repo);
 
+      section(L('Smooth Ramp') || 'Smooth Ramp');
+      var rampMin = inp(10, '90px'); rampMin.type = 'number'; rampMin.min = 2; rampMin.max = 60;
+      field(L('Send every (min)') || '送訊號間隔(分)', rampMin);
+      note(L('Only used while Smooth Ramp is on.') || '僅在 Smooth Ramp 開啟時生效。');
+      fetch('/api/ramp/status').then(function (r) { return r.json(); })
+        .then(function (rs) { rampMin.value = rs.interval_min || 10; }).catch(function () {});
+
       var saveBtn = el('button', { type: 'button', textContent: L('Save') });
       styleBtn(saveBtn); saveBtn.style.marginTop = '12px'; saveBtn.style.borderColor = '#4a7';
       saveBtn.onclick = function () {
@@ -208,9 +215,11 @@
           location: { timezone: tz.value.trim(), latitude: parseFloat(lat.value), longitude: parseFloat(lon.value) },
           update: { channel: chSel.value }
         };
+        var rampBody = { interval_min: parseInt(rampMin.value, 10) || 10 };
         Promise.all([
           fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(lampBody) }).then(function (r) { return r.json(); }),
-          fetch('/api/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(setupBody) }).then(function (r) { return r.json(); })
+          fetch('/api/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(setupBody) }).then(function (r) { return r.json(); }),
+          fetch('/api/ramp/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(rampBody) }).then(function (r) { return r.json(); }).catch(function () { return {}; })
         ]).then(function (res) {
           saveBtn.disabled = false;
           var err = (res[0] && res[0].error) || (res[1] && res[1].error);

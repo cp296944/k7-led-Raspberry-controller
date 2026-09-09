@@ -29,6 +29,8 @@ type Lamp struct {
 	ops        int // total lamp ops attempted
 	fails      int // total that errored
 	consecFail int // current consecutive-failure streak (0 when healthy)
+
+	onReconnect func() // fired (async) when an op succeeds after a failure streak
 }
 
 func New(host string, port int) *Lamp {
@@ -40,6 +42,15 @@ func New(host string, port int) *Lamp {
 
 // Gate exposes the mutex so the proxy can hold it for a whole client session.
 func (l *Lamp) Gate() *sync.Mutex { return &l.mu }
+
+// SetOnReconnect registers a callback fired (in a goroutine) the first time a
+// lamp op succeeds after one or more consecutive failures — i.e. the link came
+// back. Used to re-sync the clock after a lamp power-cycle.
+func (l *Lamp) SetOnReconnect(fn func()) {
+	l.mu.Lock()
+	l.onReconnect = fn
+	l.mu.Unlock()
+}
 
 func (l *Lamp) client(timeout time.Duration) k7tcp.Client {
 	return k7tcp.New(l.host, l.port, timeout)
@@ -66,8 +77,8 @@ func (l *Lamp) Health() Health {
 
 func (l *Lamp) do(name string, timeout time.Duration, fn func(k7tcp.Client) error) error {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	l.ops++
+	recovered := false
 	err := fn(l.client(timeout))
 	if err != nil {
 		l.last.failAt = time.Now()
@@ -77,7 +88,17 @@ func (l *Lamp) do(name string, timeout time.Duration, fn func(k7tcp.Client) erro
 		slog.Warn("lamp op failed", "op", name, "err", err, "consec", l.consecFail)
 	} else {
 		l.last.okAt = time.Now()
+		if l.consecFail > 0 {
+			recovered = true
+		}
 		l.consecFail = 0
+	}
+	onReconnect := l.onReconnect
+	l.mu.Unlock()
+
+	if recovered && onReconnect != nil {
+		slog.Info("lamp link recovered", "op", name)
+		go onReconnect() // runs later, acquires the gate fresh — no re-entry
 	}
 	return err
 }

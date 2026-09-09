@@ -170,6 +170,38 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 
 ---
 
+## Current state (2026-09-09 — pi-v1.0.3 in progress; pi-v1.0.2 merged PR #15)
+
+### pi-v1.0.3 — time-sync B + drift check + model detect + ramp cadence + OEM presets
+- **time-sync B**: engine `Run` — 6h ticker → `untilNextDaily(4, tz)` (one sync
+  at ~04:00 local) + `MaintNow()` (fired by `lamp.SetOnReconnect` when the link
+  recovers) + startup. `maintenance()` = SyncTime then, if wired, `driftCheck()`.
+- **drift check** (main.go `eng.SetDriftCheck`): after a sync, `api.ReadAll()`
+  the lamp schedule, compare channels 2..7 vs `StateSnapshot().Schedule`; if
+  they differ AND `LastPushedAt != "" && !scheduleAllZero` → `api.Republish()`.
+  Never pushes a blank over a real schedule.
+- `lamp.do()` tracks a recovery (`consecFail`>0 then a success) and fires
+  `onReconnect` async (goroutine, no gate re-entry).
+- **gap #3 model detect**: `httpapi.deviceFromLampName` (k7m*→mini, k7_/k7p*→
+  pro); `saveStateFromLamp` auto-corrects `config.Device` + logs. table test.
+- **⚙ Smooth Ramp cadence**: `EffectsStore.Ramp.IntervalMin`; `POST
+  /api/ramp/config {interval_min}` (2–60, default 10); `applyRampCadence` uses
+  it; `/api/ramp/status` returns `interval_min`. Overlay ⚙ modal gained the
+  field (saved alongside lamp/location/channel).
+- **OEM factory curves**: `internal/httpapi/presets-oem.json` (NEW, hand-
+  transcribed from `../noo-psyche_APK_analysis.md` §5 — K7 SPS/LPS/SL + X4 for
+  Mini). `handlePresets` merges `preset:oem-*` into the per-device catalog.
+- **#8 threat model**: README Notes — `:8266` + the HTTP API are unauth
+  plaintext; don't port-forward; wlan0 never-default limits blast radius.
+- Verified on the real Pi scratch port: `/api/presets` shows `oem-*`,
+  `/api/ramp/config` persists interval_min, model detect leaves k7pro alone,
+  no spurious drift re-push.
+- tests: `untilNextDaily`, `deviceFromLampName`, schedule helpers,
+  (piapi rampConfig via existing patterns).
+
+### NOT done from the batch (deferred): #5 (255→100 clamp, cosmetic), #6
+(inter-op gap — only if soak shows spikes), #9 (demo mode — low value).
+
 ## Current state (2026-09-09 — pi-v1.0.2 in progress)
 
 Context: user ran a ~10h soak on pi-v1.0.1 — RSS flat at 13MB, goroutines pinned
