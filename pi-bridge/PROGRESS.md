@@ -170,7 +170,18 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 
 ---
 
-## Current state (2026-09-09 — pi-v1.0.3 in progress; pi-v1.0.2 merged PR #15)
+## Current state (2026-09-09 — pi-v1.0.3 merged, PR #16; == origin/master ad34966)
+
+**Both APK-teardown batch PRs landed (pi-v1.0.2 #15, pi-v1.0.3 #16). Releases
+published. 18/18 capabilities. Pi is still on pi-v1.0.1 until the user OTAs.**
+
+### NEXT
+- User OTAs the Pi to pi-v1.0.3, relocates it near the tank, runs the 7-day
+  soak. Check `curl <pi>/api/diag` (rss / goroutines / lamp_fails) + soak.log.
+  If they turn Smooth Ramp on for part of it, also watch `w_auto` growth.
+- **Phase 5 — Home Assistant** (`pi-v1.1`): `/api/ha/*` REST + `custom_components/
+  k7_lamp/` → `D:\HomeAssistant\custom_components\`. DESIGN.md §7.
+- deferred polish: #5 (255→100 clamp), #6 (inter-op gap, soak-gated), #9 (demo).
 
 ### pi-v1.0.3 — time-sync B + drift check + model detect + ramp cadence + OEM presets
 - **time-sync B**: engine `Run` — 6h ticker → `untilNextDaily(4, tz)` (one sync
