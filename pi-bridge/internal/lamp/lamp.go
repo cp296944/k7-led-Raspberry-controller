@@ -107,9 +107,9 @@ func (l *Lamp) Preview(ch [k7tcp.Channels]uint8) error {
 
 func (l *Lamp) ReadAll() (k7tcp.LampState, error) {
 	var st k7tcp.LampState
-	err := l.do("readAll", 8*time.Second, func(c k7tcp.Client) error {
+	err := l.do("readAll", 12*time.Second, func(c k7tcp.Client) error {
 		var e error
-		st, e = c.ReadAll()
+		st, e = k7tcp.ReadAllRobust(c) // retrying, frame-aware (pi-bridge addition)
 		return e
 	})
 	return st, err

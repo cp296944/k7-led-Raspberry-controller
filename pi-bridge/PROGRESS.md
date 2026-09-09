@@ -170,6 +170,46 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 
 ---
 
+## Current state (2026-09-09 — pi-v1.0.2 in progress)
+
+Context: user ran a ~10h soak on pi-v1.0.1 — RSS flat at 13MB, goroutines pinned
+at 16, zero lamp fails, zero journal warnings. Then had another chat teardown
+the OEM Android APK (`../noo-psyche_APK_analysis.md`,
+`../noo-psyche_vs_pi-bridge.md`) → confirmed `k7tcp` is a correct impl, surfaced
+robustness gaps. User picked a batch of fixes.
+
+### pi-v1.0.2 — timezone + ReadAll robustness (gap-analysis #1, #2, #4)
+- **#1 timezone**: `main.go` now does `time.Local = tz` (+ `os.Setenv("TZ")`).
+  Before: engine scheduled in `config.Timezone` but `k7tcp.SyncTimeLocal` /
+  `PushSchedule` sent `time.Now()` = the OS zone → on a stock UTC Pi the whole
+  photoperiod ran 8h off. `resolveTimezone()` extracted + tested. piapi.warnings
+  adds a "時區不一致" warning if the OS zone still ≠ config.
+  `TestTimezonePinnedForLampClock`.
+- **#2/#4 ReadAll**: new `internal/k7tcp/readrobust.go` (a NEW file — client.go
+  stays byte-identical to upstream, sync check unaffected). `ReadAllRobust`:
+  up to 4 attempts, each returns the instant a decodable frame is in hand.
+  `frameStart()` locates the real frame past the lamp's 4-byte write-ack
+  ("AB AA A5 A1") — verified by a raw-socket probe of the real K7 Pro, whose
+  frame is `AB AA 10 08 <6 manual> <count=24> …` (byte 2-3 is the echoed cmd,
+  NOT "A5 <type>"; the count byte at +10 is the discriminator). `lamp.ReadAll`
+  and `httpapi.handleLampRead` both route through it.
+  **Measured on the real Pi+lamp: `/api/lamp/read` 5.0s → 1.05s, no more 502s.**
+  Tests: clean / ack-then-frame / coalesced / junk-then-frame / bounded-retry.
+- `routes()` gained `resolveTimezone`; piapi.Deps gained `TZName`.
+
+### NEXT (this session, batched by the user) — pi-v1.0.3+
+- time-sync **B**: drop the 6h ticker → daily (04:00) + on-reconnect + startup;
+  the daily sync also **reads back the lamp schedule and re-pushes if it drifted**
+  from what pi-bridge expects (the OEM-teardown "drift check" idea).
+- gap #3: derive `k7pro`/`k7mini` from `LampState.Name` prefix in
+  `saveStateFromLamp`; auto-correct or warn.
+- ⚙ settings: add a **Smooth Ramp send-interval** field (currently hardcoded
+  `rampOnInterval = 10m`).
+- ship the OEM factory curves (`../noo-psyche_APK_analysis.md` §5) as
+  `preset:k7-sps-factory` / `-lps-` / `-sl-`.
+- README: `:8266` proxy is unauthenticated on the LAN — threat-model note (#8).
+- (deferred/skip) #5 clamp 255→100 cosmetic, #6 inter-op gap, #9 demo mode.
+
 ## Current state (2026-09-08 — pi-v1.0.1 merged)
 
 **PR #14 merged. origin/master == origin/dev/pi-bridge == c68b176. Release

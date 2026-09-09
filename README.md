@@ -144,6 +144,14 @@ scripts are **byte-for-byte upstream**. `git diff upstream/master -- pc-bridge s
 - **Applying an update needs only `{confirm:true}`** — `tag` is advisory; if a
   newer release appeared since the page loaded, that newer one is installed and
   the response names it.
+- **`/api/lamp/read` retries and is frame-aware** (`k7tcp.ReadAllRobust`) —
+  it re-asks up to 4× and returns the moment a full `AB AA … BB` frame decodes,
+  instead of upstream's single shot + fixed 5 s drain. On a real K7 Pro over
+  weak Wi-Fi this took a read from ~5 s to ~1 s and removed spurious `502`s.
+- **One process clock** — `time.Local` is pinned to the configured timezone at
+  startup, so the wall time the engine schedules against and the H:M:S bundled
+  into every lamp `SyncTime` / `PushSchedule` always agree (a stock headless Pi
+  OS is UTC; the "Checks" panel warns if the OS zone still disagrees).
 - All 18 capability flags are advertised `true`, so the shared UI shows every
   control (upstream `pc-bridge` hides 9).
 

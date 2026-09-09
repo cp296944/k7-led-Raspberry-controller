@@ -104,3 +104,29 @@ func TestSetupFactoryResetNeedsConfirm(t *testing.T) {
 		t.Errorf("factory-reset without confirm: %d %s", rr.Code, rr.Body.String())
 	}
 }
+
+// After resolveTimezone + time.Local pin, the clock k7tcp sends to the lamp
+// (time.Now(), i.e. time.Local) must be the same wall time the engine schedules
+// against (time.Now().In(tz)).
+func TestTimezonePinnedForLampClock(t *testing.T) {
+	orig := time.Local
+	t.Cleanup(func() { time.Local = orig })
+
+	loc, ok := resolveTimezone("America/New_York")
+	if !ok || loc.String() != "America/New_York" {
+		t.Fatalf("resolveTimezone: ok=%v loc=%v", ok, loc)
+	}
+	time.Local = loc
+
+	if time.Now().Hour() != time.Now().In(loc).Hour() {
+		t.Errorf("time.Now() hour %d != engine tz hour %d — lamp clock would disagree",
+			time.Now().Hour(), time.Now().In(loc).Hour())
+	}
+
+	if _, ok := resolveTimezone("Mars/Olympus"); ok {
+		t.Error("resolveTimezone accepted a bogus zone")
+	}
+	if _, ok := resolveTimezone(""); ok {
+		t.Error(`resolveTimezone("") should report not-ok`)
+	}
+}
