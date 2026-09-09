@@ -104,6 +104,11 @@
       location.reload();
     };
 
+    // system monitor
+    var mon = el('button', { type: 'button', textContent: '📊', title: dict['System monitor'] || '系統監視' });
+    styleBtn(mon);
+    mon.onclick = openSysMon;
+
     // settings (setup_portal)
     var gear = el('button', { type: 'button', textContent: '⚙', title: dict['Settings'] || '設定' });
     styleBtn(gear);
@@ -113,6 +118,7 @@
     wrap.appendChild(autoLbl);
     wrap.appendChild(status);
     wrap.appendChild(sel);
+    wrap.appendChild(mon);
     wrap.appendChild(gear);
     anchor.parentNode.insertBefore(wrap, anchor.nextSibling);
     return true;
@@ -266,6 +272,74 @@
       note(L('Data dir') + ': ' + (d.system && d.system.data_dir || '?'));
     }).catch(function (e) { body.textContent = '✗ ' + e; });
   }
+
+  // ---- system monitor (Pi resources, live) --------------------------------
+  function openSysMon() {
+    if (document.getElementById('k7pi-sysmon')) return;
+    var m = modalShell('k7pi-sysmon', (dict['System monitor'] || '系統監視') + ' · Raspberry Pi');
+    var body = m.body;
+    document.body.appendChild(m.back);
+    body.textContent = '…';
+
+    var fmtDur = function (s) {
+      s = Math.max(0, s | 0);
+      var d = (s / 86400) | 0, h = ((s % 86400) / 3600) | 0, mn = ((s % 3600) / 60) | 0;
+      return (d ? d + 'd ' : '') + (h ? h + 'h ' : '') + mn + 'm';
+    };
+    var kib = function (kb) {
+      if (!kb) return '—';
+      if (kb >= 1048576) return (kb / 1048576).toFixed(1) + ' GB';
+      if (kb >= 1024) return (kb / 1024).toFixed(0) + ' MB';
+      return kb + ' KB';
+    };
+    var bar = function (frac, color) {
+      var w = Math.max(0, Math.min(100, Math.round(frac * 100)));
+      return '<div style="height:6px;border-radius:3px;background:var(--surface2,#262e37);overflow:hidden;margin-top:3px">' +
+        '<div style="height:100%;width:' + w + '%;background:' + color + '"></div></div>';
+    };
+    var row = function (label, valHTML) {
+      return '<div style="display:flex;justify-content:space-between;gap:10px;padding:5px 0;font-size:0.86rem;border-bottom:1px solid var(--border,#2c343d)">' +
+        '<span style="color:var(--muted,#93a1af)">' + label + '</span><span style="text-align:right">' + valHTML + '</span></div>';
+    };
+
+    var render = function (d) {
+      var n = (d && d.now) || {};
+      var load = n.load || [0, 0, 0];
+      var memUsed = (n.mem_total_kb || 0) - (n.mem_avail_kb || 0);
+      var memFrac = n.mem_total_kb ? memUsed / n.mem_total_kb : 0;
+      var diskUsed = (n.disk_total_kb || 0) - (n.disk_free_kb || 0);
+      var diskFrac = n.disk_total_kb ? diskUsed / n.disk_total_kb : 0;
+      var loadFrac = n.cpu_count ? load[0] / n.cpu_count : 0;
+      var t = n.soc_temp_c || 0;
+      var tColor = t >= 75 ? '#e05a5a' : t >= 65 ? '#e0a53a' : '#4caf50';
+      var w = n.writes_today || {};
+
+      var html = '';
+      html += row(dict['Version'] || '版本', n.version + '  ·  ' + (dict['uptime'] || '運行') + ' ' + fmtDur(n.uptime_s));
+      html += row('CPU', 'load ' + load.map(function (x) { return (+x).toFixed(2); }).join(' / ') + ' · ' + (n.cpu_count || '?') + ' ' + (dict['cores'] || '核') +
+        bar(loadFrac, loadFrac > 0.9 ? '#e05a5a' : '#4caf50'));
+      html += row(dict['Memory'] || '記憶體', kib(memUsed) + ' / ' + kib(n.mem_total_kb) + '  (' + Math.round(memFrac * 100) + '%)' +
+        bar(memFrac, memFrac > 0.9 ? '#e05a5a' : memFrac > 0.75 ? '#e0a53a' : '#4caf50'));
+      html += row(dict['SoC temp'] || '晶片溫度', t ? '<b style="color:' + tColor + '">' + t.toFixed(1) + ' °C</b>' : '—');
+      html += row(dict['Disk'] || '磁碟', kib(diskUsed) + ' / ' + kib(n.disk_total_kb) + '  ·  ' + kib(n.disk_free_kb) + ' ' + (dict['free'] || '可用') +
+        bar(diskFrac, diskFrac > 0.9 ? '#e05a5a' : '#4caf50'));
+      html += row(dict['Process (Go)'] || '程序', 'RSS ' + kib(n.rss_kb) + ' · heap ' + kib(n.heap_kb) + ' · ' + (n.goroutines || 0) + ' goroutines · GC×' + (n.gc_count || 0));
+      html += row(dict['Engine'] || '引擎', (n.engine_live ? (dict['live-driving'] || '即時驅動中') : (dict['dormant'] || '待命')) +
+        ' · ' + (dict['today'] || '今日') + ' ' + (dict['auto'] || '自動') + ' ' + (w.auto || 0) + ' / ' + (dict['manual'] || '手動') + ' ' + (w.manual || 0));
+      html += row(dict['Lamp link'] || '燈連線', (n.lamp_ok ? '✓' : '✗') + ' · ' + (n.lamp_ops || 0) + ' ' + (dict['ops'] || '次') +
+        ' · ' + (n.lamp_fails || 0) + ' ' + (dict['fails'] || '失敗') + (n.lamp_consec_fail ? ' (' + n.lamp_consec_fail + ' ' + (dict['in a row'] || '連續') + ')' : ''));
+      body.innerHTML = html;
+    };
+
+    var poll = function () {
+      if (!document.getElementById('k7pi-sysmon')) { clearInterval(iv); return; }
+      fetch('/api/diag?lines=1').then(function (r) { return r.json(); }).then(render)
+        .catch(function (e) { /* keep last render */ });
+    };
+    var iv = setInterval(poll, 5000);
+    poll();
+  }
+
   function autoLbl_style(l) {
     l.style.cssText = 'display:inline-flex;gap:3px;align-items:center;font-size:0.76rem;color:var(--muted,#8a95a3);cursor:pointer';
   }
@@ -498,6 +572,33 @@
   // ---- today's lamp-write counter (in the topbar) ----------------------
   // Auto  = writes the always-on engine made (smooth ramp / feed / maintenance).
   // Manual = writes you triggered (Push / Preview / re-arm). Resets at midnight.
+  // The "Checks" card renders nothing when there are no warnings — which looks
+  // broken. Wrap renderWarnings so an all-clear shows a green "✓ no issues", and
+  // poll once on our own in case the page hasn't called it yet.
+  function mountChecksPlaceholder() {
+    if (mountChecksPlaceholder.done) return;
+    var fill = function () {
+      var list = document.getElementById('warningsList');
+      if (list && !list.children.length) {
+        var d = el('div', { className: 'warn-item' });
+        d.setAttribute('data-level', 'ok');
+        d.style.cssText = 'color:#4caf50';
+        d.textContent = dict['✓ No issues detected'] || '✓ 目前無異常';
+        list.appendChild(d);
+      }
+    };
+    if (typeof window.renderWarnings === 'function' && !window.renderWarnings._k7pi) {
+      var orig = window.renderWarnings;
+      window.renderWarnings = function () { var r = orig.apply(this, arguments); try { fill(); } catch (e) {} return r; };
+      window.renderWarnings._k7pi = true;
+      mountChecksPlaceholder.done = true;
+    }
+    fetch('/api/warnings/status').then(function (r) { return r.json(); }).then(function (d) {
+      if (typeof window.renderWarnings === 'function') window.renderWarnings(d);
+      else fill();
+    }).catch(function () {});
+  }
+
   function mountWrites() {
     var hdr = document.getElementById('k7pi-hdr');
     if (!hdr || document.getElementById('k7pi-writes')) return;
@@ -747,7 +848,7 @@
       // Each step is independent: a slow/absent chart must not stop the header
       // controls, and a transient Chart.js hiccup must not stop the value table.
       // Keep retrying every step until it has taken hold (or ~15s elapses).
-      var steps = [retranslateAll, mountHeaderControls, mountWifi, mountWrites,
+      var steps = [retranslateAll, mountHeaderControls, mountWifi, mountWrites, mountChecksPlaceholder,
                    tuneChartAxis, mountValueTable, mountVersionChangelog, installExplicitApply];
       var run = function () {
         steps.forEach(function (fn) { try { fn(); } catch (e) { /* retry next tick */ } });

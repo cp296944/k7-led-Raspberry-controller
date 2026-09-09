@@ -170,7 +170,37 @@ opens its own per-call conns (brief, low collision risk). Unify if it bites.
 
 ---
 
-## Current state (2026-09-09 — pi-v1.0.3 in progress; pi-v1.0.2 merged PR #15)
+## Current state (2026-09-09 — pi-v1.0.4 in progress)
+
+### pi-v1.0.4 — in-UI system monitor + non-empty "Checks"
+User asked for a Pi resource monitor in the controller UI, and noted the
+"檢查" card is still blank (it's blank because there are genuinely no warnings —
+confirmed on the real Pi: `/api/warnings/status` → `{count:0,items:[]}`).
+- `/api/diag` snapshot extended with OS metrics: `cpu_count`, `load[3]`,
+  `mem_total_kb`/`mem_avail_kb`, `disk_total_kb`/`disk_free_kb`, `soc_temp_c`,
+  `lamp_ok`/`lamp_last_ok_at`. `cmd/k7-pi-bridge/sysinfo.go` (/proc, /sys reads)
+  + `sysinfo_linux.go` / `sysinfo_other.go` (build-tagged `syscall.Statfs`).
+  soak.log line gained `load1`, `mem_avail_kb`, `temp_c`.
+- overlay.js: **📊 button** in the top bar → `openSysMon()` modal — CPU load,
+  RAM (bar), SoC temp (colour-coded), disk (bar), Go process, engine state,
+  lamp link; polls `/api/diag?lines=1` every 5 s.
+- overlay.js: `mountChecksPlaceholder()` wraps `window.renderWarnings` so an
+  empty warnings list shows a green "✓ 目前無異常" instead of nothing.
+- Verified on the real Pi scratch port: temp 49.4°C, load 0.00, RAM 21%,
+  disk 9% — all rendering with bars; "檢查" shows the all-clear.
+
+## Current state (2026-09-09 — pi-v1.0.3 merged, PR #16; == origin/master ad34966)
+
+**Both APK-teardown batch PRs landed (pi-v1.0.2 #15, pi-v1.0.3 #16). Releases
+published. 18/18 capabilities. Pi is still on pi-v1.0.1 until the user OTAs.**
+
+### NEXT
+- User OTAs the Pi to pi-v1.0.3, relocates it near the tank, runs the 7-day
+  soak. Check `curl <pi>/api/diag` (rss / goroutines / lamp_fails) + soak.log.
+  If they turn Smooth Ramp on for part of it, also watch `w_auto` growth.
+- **Phase 5 — Home Assistant** (`pi-v1.1`): `/api/ha/*` REST + `custom_components/
+  k7_lamp/` → `D:\HomeAssistant\custom_components\`. DESIGN.md §7.
+- deferred polish: #5 (255→100 clamp), #6 (inter-op gap, soak-gated), #9 (demo).
 
 ### pi-v1.0.3 — time-sync B + drift check + model detect + ramp cadence + OEM presets
 - **time-sync B**: engine `Run` — 6h ticker → `untilNextDaily(4, tz)` (one sync

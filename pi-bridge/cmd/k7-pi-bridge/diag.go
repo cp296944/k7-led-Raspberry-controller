@@ -42,27 +42,45 @@ func (d *diagAPI) snapshot() map[string]any {
 	auto, manual, day := d.tally.Today()
 	ls := d.lamp.Stats()
 	st := d.eng.Status()
+	lh := d.lamp.Health()
+
+	memTotal, memAvail := meminfoKB()
+	l1, l5, l15 := loadAvg()
+	diskTotal, diskFree := diskKB("/")
+
 	return map[string]any{
-		"ts":            time.Now().Format(time.RFC3339),
-		"version":       d.version,
-		"uptime_s":      int(time.Since(d.started).Seconds()),
-		"rss_kb":        rssKB(),
-		"heap_kb":       int(ms.HeapAlloc / 1024),
-		"heap_sys_kb":   int(ms.HeapSys / 1024),
-		"goroutines":    runtime.NumGoroutine(),
-		"gc_count":      int(ms.NumGC),
-		"engine_live":   d.eng.Live(),
-		"last_write_ok": st.LastWriteOK,
-		"lamp_ops":      ls.Ops,
-		"lamp_fails":    ls.Fails,
+		"ts":               time.Now().Format(time.RFC3339),
+		"version":          d.version,
+		"uptime_s":         int(time.Since(d.started).Seconds()),
+		"rss_kb":           rssKB(),
+		"heap_kb":          int(ms.HeapAlloc / 1024),
+		"heap_sys_kb":      int(ms.HeapSys / 1024),
+		"goroutines":       runtime.NumGoroutine(),
+		"gc_count":         int(ms.NumGC),
+		"engine_live":      d.eng.Live(),
+		"last_write_ok":    st.LastWriteOK,
+		"lamp_ops":         ls.Ops,
+		"lamp_fails":       ls.Fails,
 		"lamp_consec_fail": ls.ConsecFail,
-		"writes_today":  map[string]any{"auto": auto, "manual": manual, "date": day},
+		"lamp_ok":          lh.OK,
+		"lamp_last_ok_at":  lh.LastOKAt.Format(time.RFC3339),
+		"writes_today":     map[string]any{"auto": auto, "manual": manual, "date": day},
+
+		// Pi / OS resources
+		"cpu_count":     runtime.NumCPU(),
+		"load":          []float64{l1, l5, l15},
+		"mem_total_kb":  memTotal,
+		"mem_avail_kb":  memAvail,
+		"disk_total_kb": diskTotal,
+		"disk_free_kb":  diskFree,
+		"soc_temp_c":    socTempC(),
 	}
 }
 
 func (d *diagAPI) logLine() string {
 	s := d.snapshot()
 	wt := s["writes_today"].(map[string]any)
+	ld := s["load"].([]float64)
 	return strings.Join([]string{
 		s["ts"].(string),
 		"ver=" + d.version,
@@ -71,6 +89,9 @@ func (d *diagAPI) logLine() string {
 		"heap_kb=" + itoa(s["heap_kb"]),
 		"goroutines=" + itoa(s["goroutines"]),
 		"gc=" + itoa(s["gc_count"]),
+		"load1=" + strconv.FormatFloat(ld[0], 'f', 2, 64),
+		"mem_avail_kb=" + itoa(s["mem_avail_kb"]),
+		"temp_c=" + strconv.FormatFloat(s["soc_temp_c"].(float64), 'f', 1, 64),
 		"live=" + btoa(s["engine_live"]),
 		"lamp_ops=" + itoa(s["lamp_ops"]),
 		"lamp_fails=" + itoa(s["lamp_fails"]),
