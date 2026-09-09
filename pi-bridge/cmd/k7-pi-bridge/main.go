@@ -60,13 +60,18 @@ func run(args []string) error {
 		"lamp", fmt.Sprintf("%s:%d", cfg.LampHost, cfg.LampPort),
 		"install_root", cfg.InstallRoot, "data_dir", cfg.DataDir)
 
-	tz := time.Local
-	if cfg.Timezone != "" {
-		if loc, e := time.LoadLocation(cfg.Timezone); e == nil {
-			tz = loc
-		} else {
-			logger.Warn("bad timezone, using system", "tz", cfg.Timezone, "err", e)
-		}
+	// One clock for the whole process. The engine computes the schedule in
+	// `tz`, but k7tcp.SyncTimeLocal / PushSchedule send time.Now() (== time.Local)
+	// to the lamp — so if the Pi's OS timezone differs from config (a stock
+	// headless Pi OS Lite is UTC) the lamp runs the photoperiod at the wrong
+	// hour. Pin time.Local to the configured zone so every path agrees.
+	tz, tzOK := resolveTimezone(cfg.Timezone)
+	if cfg.Timezone != "" && !tzOK {
+		logger.Warn("bad timezone in config, using system zone", "tz", cfg.Timezone)
+	}
+	time.Local = tz
+	if tzOK {
+		_ = os.Setenv("TZ", cfg.Timezone)
 	}
 
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
@@ -151,6 +156,7 @@ func run(args []string) error {
 			Lamp:    lampConn,
 			Log:     rlog,
 			TZ:      tz,
+			TZName:  cfg.Timezone,
 			DataDir: cfg.DataDir,
 			FX:      fx,
 			Tally:   writeTally,
@@ -208,6 +214,19 @@ func run(args []string) error {
 	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutCtx)
+}
+
+// resolveTimezone returns the configured zone (and true) or time.Local (and
+// false) when the name is empty or unknown.
+func resolveTimezone(name string) (*time.Location, bool) {
+	if name == "" {
+		return time.Local, false
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return time.Local, false
+	}
+	return loc, true
 }
 
 func routes(cfg config.Config, cfgPath string, up *updater.Updater, autoUpdate *atomic.Bool, ui http.Handler, extra ...func(*http.ServeMux)) http.Handler {

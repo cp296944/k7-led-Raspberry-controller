@@ -36,6 +36,7 @@ type Deps struct {
 	Lamp    *lamp.Lamp
 	Log     *ringlog.Ring
 	TZ      *time.Location
+	TZName  string        // configured timezone name, for a mismatch warning
 	WlanIf  string        // e.g. "wlan0"
 	DataDir string        // fallback if FX is nil
 	FX      *EffectsStore // share the same store the Provider uses
@@ -349,6 +350,10 @@ func (h *handler) warnings(w http.ResponseWriter, r *http.Request) {
 
 	if !engine.ClockSane() {
 		add("error", "控制器時鐘尚未設定 — 排程不會執行 (controller clock not set)")
+	}
+	if h.TZName != "" && time.Now().Location().String() != h.TZName {
+		add("warn", fmt.Sprintf("時區不一致:設定 %s,系統實際 %s — 燈可能跑錯時段 (run `sudo timedatectl set-timezone %s` and restart)",
+			h.TZName, time.Now().Location().String(), h.TZName))
 	}
 
 	if h.Lamp != nil {

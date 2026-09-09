@@ -500,7 +500,7 @@ func (s *Server) handleLampRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	unlock := s.lampLock()
-	state, err := s.client().ReadAll()
+	state, err := k7tcp.ReadAllRobust(s.client()) // retrying, frame-aware
 	unlock()
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
