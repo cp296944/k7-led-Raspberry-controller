@@ -138,9 +138,14 @@ scripts are **byte-for-byte upstream**. `git diff upstream/master -- pc-bridge s
 - **Today's lamp-write counter** in the top bar — `auto` (engine) vs `manual`
   (your Push / Preview), reset at local midnight and **persisted to
   `data/writes.json`** so a restart or a mid-day OTA doesn't zero it.
-- **Soak endpoint** — `GET /api/diag` returns a live snapshot (RSS, heap,
-  goroutines, GC, lamp-op health, today's writes) plus the tail of an hourly
-  `data/soak.log`, for reviewing a multi-day unattended run.
+- **System monitor** — a 📊 button in the top bar opens a live view of the Pi:
+  CPU load, RAM, SoC temperature, disk, the Go process (RSS / heap / goroutines),
+  engine state and lamp-link health, refreshed every 5 s.
+- **Soak endpoint** — `GET /api/diag` returns that same snapshot (plus CPU
+  load, mem, temp, disk) and the tail of an hourly `data/soak.log`, for
+  reviewing a multi-day unattended run.
+- **"Checks" shows an all-clear** — a green "✓ no issues detected" instead of a
+  blank card when `/api/warnings/status` is empty.
 - **Applying an update needs only `{confirm:true}`** — `tag` is advisory; if a
   newer release appeared since the page loaded, that newer one is installed and
   the response names it.
